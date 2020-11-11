@@ -1,0 +1,50 @@
+{
+  "name": "@nels.onl/osmosis",
+  "version": "0.0.91",
+  "description": "JSON database with automatic multicast+CRDT background sync",
+  "main": "index.js",
+  "author": "Adam R. Nelson <adam@nels.onl>",
+  "license": "MIT",
+  "scripts": {
+    "build.grammar": "nearleyc src/jsonpath.grammar.ne -o src/jsonpath.grammar.ts && prettier -w --parser=babel src/jsonpath.grammar.ts",
+    "prebuild": "yarn build.grammar",
+    "build": "tsc && babel src --out-dir dist --extensions .ts",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.12.1",
+    "@babel/core": "^7.12.3",
+    "@babel/preset-env": "^7.12.1",
+    "@babel/preset-typescript": "^7.12.1",
+    "@babel/register": "^7.12.1",
+    "@types/chai": "^4.2.14",
+    "@types/mocha": "^8.0.3",
+    "@types/node": "^14.14.6",
+    "@typescript-eslint/eslint-plugin": "^4.6.1",
+    "@typescript-eslint/parser": "^4.6.1",
+    "chai": "^4.2.0",
+    "eslint": "^7.12.1",
+    "mocha": "^8.2.1",
+    "prettier": "^2.1.2",
+    "prettier-plugin-organize-imports": "^1.1.1",
+    "typescript": "^4.0.5"
+  },
+  "dependencies": {
+    "@types/lodash.clonedeep": "^4.5.6",
+    "@types/lodash.flatmap": "^4.5.6",
+    "@types/lodash.isequal": "^4.5.5",
+    "@types/lodash.isplainobject": "^4.0.6",
+    "@types/lodash.sortedindexby": "^4.6.6",
+    "@types/nearley": "^2.11.1",
+    "immer": "^7.0.14",
+    "lodash.clonedeep": "^4.5.0",
+    "lodash.flatmap": "^4.5.0",
+    "lodash.isequal": "^4.5.0",
+    "lodash.isplainobject": "^4.0.6",
+    "lodash.sortedindexby": "^4.6.0",
+    "nearley": "^2.19.7",
+    "sodium-native": "^3.2.0",
+    "ulid": "^2.3.0",
+    "zeromq": "6.0.0-beta.5"
+  }
+}
