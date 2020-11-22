@@ -2,6 +2,7 @@ import { Draft } from 'immer';
 import flatMap from 'lodash.flatmap';
 import isEqual from 'lodash.isequal';
 import isPlainObject from 'lodash.isplainobject';
+import last from 'lodash.last';
 import { Failure, Json, JsonArray, JsonObject, PathArray } from './types';
 
 export interface SetAction<Path> {
@@ -90,7 +91,7 @@ function followPath(
       json
     );
   if (parent && (Array.isArray(parent) || isPlainObject(parent))) {
-    const key = path[path.length - 1];
+    const key = last(path) as number | string;
     return { parent, key, value: parent[key] };
   }
   return { failed: true, failure: { path, message: 'path does not exist' } };
@@ -99,11 +100,7 @@ function followPath(
 function elementsAfter(path: PathArray, length: number): PathArray[] {
   const elements: PathArray[] = [];
   const parentPath = path.slice(0, path.length - 1);
-  for (
-    let i = Math.min(path[path.length - 1] as number, length - 1);
-    i < length;
-    i++
-  ) {
+  for (let i = Math.min(last(path) as number, length - 1); i < length; i++) {
     elements.push([...parentPath, i]);
   }
   return elements;

@@ -1,5 +1,6 @@
 import produce, { Draft } from 'immer';
 import flatMap from 'lodash.flatmap';
+import last from 'lodash.last';
 import sortedIndexBy from 'lodash.sortedindexby';
 import { DataAction, mapActionToList } from './actions';
 import {
@@ -60,14 +61,16 @@ const MIN_SAVE_POINT_SIZE = 4;
 
 export function timestampIndex(
   timestamp: Timestamp,
-  ops: readonly { timestamp: Timestamp }[]
+  ops: readonly { timestamp: Timestamp }[],
+  expectMatch: boolean = false
 ): number {
   const i = sortedIndexBy(ops, { timestamp }, (x) =>
     timestampToString(x.timestamp)
   );
   if (
-    ops[i]?.timestamp?.author === timestamp.author &&
-    ops[i]?.timestamp?.index === timestamp.index
+    !expectMatch ||
+    (ops[i]?.timestamp?.author === timestamp.author &&
+      ops[i]?.timestamp?.index === timestamp.index)
   ) {
     return i;
   }
@@ -80,7 +83,7 @@ export class Store {
   private nextIndex = 1;
   private queryListeners: QueryListener[] = [];
 
-  constructor(private readonly saveState: SaveState) {
+  constructor(public readonly saveState: SaveState) {
     let { uuid, ops, savePoints } = saveState.load();
     if (!savePoints.length) {
       const firstSavePoint = {
@@ -93,10 +96,10 @@ export class Store {
       savePoints = [firstSavePoint];
       saveState.addSavePoint(firstSavePoint);
     }
-    const savePoint = savePoints[savePoints.length - 1];
+    const savePoint = last(savePoints) as SavePoint;
     this.uuid = uuid;
     this.state = ops
-      .slice(timestampIndex(savePoint.timestamp, ops))
+      .slice(timestampIndex(savePoint.timestamp, ops, true))
       .reduce((state, op) => this.applyOp(op, SaveChanges.Never, state).state, {
         root: savePoint.root,
         idToPath: savePoint.idToPath,
@@ -129,59 +132,67 @@ export class Store {
   }
 
   mergeOps(ops: Op[]): { changed: PathArray[]; failures: Failure[] } {
-    let earliest = this.state.ops.length;
-    const { ops: updatedOps } = produce(this.state, (state) => {
+    if (!ops.length) return { changed: [], failures: [] };
+
+    let earliestInsertionIndex = this.state.ops.length;
+    const { ops: opsWithInsertions } = produce(this.state, (state) => {
       (ops as Draft<Op>[]).forEach((op) => {
-        const index = sortedIndexBy(state.ops, op, (x) =>
-          timestampToString(x.timestamp)
-        );
+        if (timestampIndex(op.timestamp, this.state.ops, true) >= 0) return;
+        const index = timestampIndex(op.timestamp, state.ops);
         state.ops.splice(index, 0, op);
-        earliest = Math.min(earliest, index);
+        earliestInsertionIndex = Math.min(earliestInsertionIndex, index);
       });
     });
-    const earliestTimestamp = timestampToString(
-      updatedOps[earliest - 1].timestamp
+    const earliestInsertionTimestamp = timestampToString(
+      opsWithInsertions[earliestInsertionIndex].timestamp
     );
-    let startIndex: number = -1;
-    const initialState = produce(this.state, (state) => {
-      let savePointIndex = -1;
-      let savePoint: Draft<SavePoint> | undefined;
-      for (let i = state.savePoints.length; i >= 0; i--) {
+
+    let opIndexOfLastSavePoint: number = -1;
+    let initialState = produce(this.state, (state) => {
+      let indexOfLastSavePoint = -1;
+      let lastSavePoint: Draft<SavePoint> | undefined;
+      for (let i = state.savePoints.length - 1; i >= 0; i--) {
         if (
-          timestampToString(state.savePoints[i].timestamp) <= earliestTimestamp
+          timestampToString(state.savePoints[i].timestamp) <=
+          earliestInsertionTimestamp
         ) {
-          savePoint = state.savePoints[i];
-          savePointIndex = i;
+          lastSavePoint = state.savePoints[i];
+          indexOfLastSavePoint = i;
           break;
         }
       }
-      if (!savePoint) {
+      if (!lastSavePoint) {
         throw new Error(
-          `FATAL: No save point before ${earliestTimestamp}. Cannot apply new ops.`
+          `FATAL: No save point before ${earliestInsertionTimestamp}. Cannot apply new ops.`
         );
       }
-      startIndex = timestampIndex(savePoint.timestamp, state.ops);
-      state.root = savePoint.root;
-      state.idToPath = savePoint.idToPath;
-      state.pathToId = savePoint.pathToId;
-      state.savePoints = state.savePoints.slice(0, savePointIndex);
-      state.ops = state.ops.slice(0, startIndex);
-      this.saveState.deleteEverythingAfter(savePoint.timestamp);
+      opIndexOfLastSavePoint = timestampIndex(
+        lastSavePoint.timestamp,
+        state.ops
+      );
+      state.root = lastSavePoint.root;
+      state.idToPath = lastSavePoint.idToPath;
+      state.pathToId = lastSavePoint.pathToId;
+      state.savePoints = state.savePoints.slice(0, indexOfLastSavePoint);
+      state.ops = state.ops.slice(0, opIndexOfLastSavePoint);
+      this.saveState.deleteEverythingAfter(lastSavePoint.timestamp);
     });
 
     const totalChanged: PathArray[] = [];
     const totalFailures: Failure[] = [];
 
-    this.state = updatedOps.slice(startIndex).reduce((lastState, op) => {
-      const { state, changed, failures } = this.applyOp(
-        op,
-        SaveChanges.Always,
-        lastState
-      );
-      totalChanged.push(...changed);
-      totalFailures.push(...failures);
-      return state;
-    }, initialState);
+    this.state = opsWithInsertions
+      .slice(opIndexOfLastSavePoint)
+      .reduce((lastState, op) => {
+        const { state, changed, failures } = this.applyOp(
+          op,
+          SaveChanges.Always,
+          lastState
+        );
+        totalChanged.push(...changed);
+        totalFailures.push(...failures);
+        return state;
+      }, initialState);
 
     return { changed: totalChanged, failures: totalFailures };
   }
@@ -222,9 +233,7 @@ export class Store {
       });
       this.saveState.addOp(op);
       if (addedSavePoint) {
-        this.saveState.addSavePoint(
-          newState.savePoints[newState.savePoints.length - 1]
-        );
+        this.saveState.addSavePoint(last(newState.savePoints) as SavePoint);
       }
     }
     return { state: newState, changed: totalChanged, failures: totalFailures };
@@ -240,9 +249,7 @@ export class Store {
     if (
       ops.length < MIN_SAVE_POINT_SIZE ||
       timestampToString(ops[ops.length - MIN_SAVE_POINT_SIZE].timestamp) <=
-        timestampToString(
-          savePoints[savePoints.length - 1]?.timestamp || ZERO_TIMESTAMP
-        )
+        timestampToString(last(savePoints)?.timestamp || ZERO_TIMESTAMP)
     ) {
       return false;
     }
@@ -254,7 +261,7 @@ export class Store {
         break;
       }
     }
-    const timestamp = ops[ops.length - 1].timestamp;
+    const timestamp = (last(ops) as Op).timestamp;
     savePoints.push({
       root,
       idToPath,

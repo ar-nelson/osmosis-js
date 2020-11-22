@@ -1,8 +1,9 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
 import { monotonicFactory } from 'ulid';
-import { Store, ZERO_TIMESTAMP } from '../src/store';
-import { timestampToString } from '../src/types';
+import { DataAction } from '../src/actions';
+import { Store, timestampIndex, ZERO_TIMESTAMP } from '../src/store';
+import { Json, timestampToString } from '../src/types';
 import MockSaveState from './mock-save-state';
 
 describe('Store', function () {
@@ -304,5 +305,134 @@ describe('Store', function () {
         },
       },
     ]);
+  });
+
+  it('should know how to locate timestamps in a list', function () {
+    const list = [
+      { entry: 1, timestamp: { author: UUID1, index: 1 } },
+      { entry: 2, timestamp: { author: UUID1, index: 2 } },
+      { entry: 3, timestamp: { author: UUID2, index: 2 } },
+      { entry: 4, timestamp: { author: UUID1, index: 4 } },
+    ];
+
+    expect(timestampIndex({ author: UUID1, index: 1 }, list)).to.equal(0);
+    expect(timestampIndex({ author: UUID1, index: 2 }, list)).to.equal(1);
+    expect(timestampIndex({ author: UUID2, index: 2 }, list, true)).to.equal(2);
+    expect(timestampIndex({ author: UUID1, index: 4 }, list, true)).to.equal(3);
+    expect(timestampIndex({ author: UUID1, index: 3 }, list, true)).to.equal(
+      -1
+    );
+    expect(timestampIndex({ author: UUID1, index: 3 }, list)).to.equal(3);
+    expect(timestampIndex({ author: UUID2, index: 4 }, list, true)).to.equal(
+      -1
+    );
+  });
+
+  function storeSync(
+    steps: [DataAction<string>[], DataAction<string>[]][],
+    store1 = new Store(new MockSaveState(UUID1)),
+    store2 = new Store(new MockSaveState(UUID2)),
+    allowFailures = false
+  ): Json {
+    let lastOp1 = store1.ops.length;
+    let lastOp2 = store2.ops.length;
+
+    steps.forEach(([actions1, actions2]) => {
+      actions1.forEach((a) => {
+        const failures = store1.dispatch(a);
+        if (!allowFailures) {
+          expect(failures).to.eql([], `failure in action ${JSON.stringify(a)}`);
+        }
+      });
+      actions2.forEach((a) => {
+        const failures = store2.dispatch(a);
+        if (!allowFailures) {
+          expect(failures).to.eql([], `failure in action ${JSON.stringify(a)}`);
+        }
+      });
+      const { failures: failures1 } = store1.mergeOps(
+        store2.ops.slice(lastOp2)
+      );
+      if (!allowFailures) {
+        expect(failures1).to.eql([], 'failure merging store2 into store1');
+      }
+      const { failures: failures2 } = store2.mergeOps(
+        store1.ops.slice(lastOp1)
+      );
+      if (!allowFailures) {
+        expect(failures1).to.eql([], 'failure merging store1 into store2');
+      }
+      lastOp1 = store1.ops.length;
+      lastOp2 = store2.ops.length;
+    });
+
+    expect(store2.queryOnce('$')).to.deep.equal(
+      store1.queryOnce('$'),
+      'store JSON state does not match'
+    );
+    expect(store2.ops).to.deep.equal(
+      store1.ops,
+      'store ops list does not match'
+    );
+    expect(store2.savePoints).to.deep.equal(
+      store1.savePoints,
+      'store save point list does not match'
+    );
+    expect(store1.saveState.load().ops).to.deep.equal(
+      store1.ops,
+      'save state ops list does not match (store 1)'
+    );
+    expect(store1.saveState.load().savePoints).to.deep.equal(
+      store1.savePoints,
+      'save state save point list does not match (store 1)'
+    );
+    expect(store2.saveState.load().ops).to.deep.equal(
+      store2.ops,
+      'save state ops list does not match (store 2)'
+    );
+    expect(store2.saveState.load().savePoints).to.deep.equal(
+      store2.savePoints,
+      'save state save point list does not match (store 2)'
+    );
+
+    return store1.queryOnce('$')[0];
+  }
+
+  it('should merge changes to unrelated subtrees', function () {
+    expect(
+      storeSync([
+        [
+          [
+            { action: 'InitObject', path: '$.foo' },
+            { action: 'Set', path: '$.foo.bar', payload: 1 },
+          ],
+          [
+            { action: 'InitObject', path: '$.baz' },
+            { action: 'Set', path: '$.baz.qux', payload: 2 },
+          ],
+        ],
+      ])
+    ).to.deep.equal({ foo: { bar: 1 }, baz: { qux: 2 } });
+  });
+
+  it('should merge changes to the same subtree', function () {
+    expect(
+      storeSync([
+        [
+          [
+            { action: 'InitArray', path: '$.foo' },
+            { action: 'InitObject', path: '$.foo[0]' },
+            { action: 'Set', path: '$.foo[0].bar', payload: 1 },
+            { action: 'Set', path: '$.foo[0].baz', payload: 2 },
+          ],
+          [
+            { action: 'InitArray', path: '$.foo' },
+            { action: 'InitObject', path: '$.foo[0]' },
+            { action: 'Set', path: '$.foo[0].qux', payload: 3 },
+            { action: 'Set', path: '$.foo[0].quux', payload: 4 },
+          ],
+        ],
+      ])
+    ).to.deep.equal({ foo: [{ bar: 1, baz: 2, qux: 3, quux: 4 }] });
   });
 });

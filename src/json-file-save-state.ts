@@ -92,9 +92,9 @@ export default class JsonFileSaveState implements SaveState {
   deleteEverythingAfter(exclusiveLowerBound: Timestamp) {
     this.saveFile = produce(this.saveFile, ({ savePoints, ops }) => {
       const i = timestampIndex(exclusiveLowerBound, savePoints);
-      if (i > 0) savePoints.splice(i, savePoints.length - i);
+      savePoints.splice(i, savePoints.length - i);
       const j = timestampIndex(exclusiveLowerBound, ops);
-      if (j > 0) ops.splice(j, ops.length - j);
+      ops.splice(j, ops.length - j);
     });
     this.scheduleWrite();
   }

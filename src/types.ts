@@ -17,6 +17,7 @@ export interface Cancelable {
 export interface Failure {
   path: PathArray;
   message: string;
+  id?: Timestamp;
 }
 
 export interface Timestamp {

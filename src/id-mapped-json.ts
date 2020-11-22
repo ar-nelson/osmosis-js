@@ -1,6 +1,7 @@
 import { Draft } from 'immer';
 import flatMap from 'lodash.flatmap';
 import isPlainObject from 'lodash.isplainobject';
+import last from 'lodash.last';
 import {
   applyAction,
   DataAction,
@@ -116,19 +117,17 @@ export function applyIdMappedAction(
         const tree = followPath(path, pathToId);
         for (const id of tree.ids) delete idToPath[timestampToString(id)];
         tree.ids = [];
-        if (typeof action.path[path.length - 1] === 'number') {
+        if (typeof last(path) === 'number') {
           const parentPath = path.slice(0, path.length - 1);
           const parent = followPath(parentPath, pathToId);
-          result.changed
-            .map((c) => c[c.length - 1] as number)
-            .sort()
-            .forEach((i) => {
-              moveTree(
-                { root, idToPath, pathToId },
-                [...parentPath, i + 1],
-                [...parentPath, i]
-              );
-            });
+          const indexes = result.changed.map(last).sort() as number[];
+          indexes.forEach((i) => {
+            moveTree(
+              { root, idToPath, pathToId },
+              [...parentPath, i + 1],
+              [...parentPath, i]
+            );
+          });
         }
       }
       break;
@@ -151,9 +150,7 @@ export function applyIdMappedAction(
       if (result.changed.length) {
         const parentPath = path.slice(0, path.length - 1);
         const parent = followPath(parentPath, pathToId);
-        const indexes = result.changed
-          .map((c) => c[c.length - 1] as number)
-          .sort();
+        const indexes = result.changed.map(last).sort() as number[];
         indexes.forEach((i) => {
           moveTree(
             { root, idToPath, pathToId },
@@ -188,7 +185,7 @@ export function splitIntoActionsWithDirectPaths(
                 json,
                 id
               );
-              if (failures.length) throw failures;
+              if (failures.length) throw failures.map((f) => ({ ...f, id }));
               if (id) id = { ...id, index: id.index + 1 };
               return actions as ScalarAction<any>[];
             }),
@@ -203,7 +200,8 @@ export function splitIntoActionsWithDirectPaths(
       throw failures;
     }
   }
-  const { existing, potential, failures } = queryPaths(json, action.path);
+  let { existing, potential, failures } = queryPaths(json, action.path);
+  failures = failures.map((f) => ({ ...f, id }));
   switch (action.action) {
     case 'Set':
     case 'InitArray':
@@ -220,7 +218,11 @@ export function splitIntoActionsWithDirectPaths(
       };
     case 'Move': {
       failures.push(
-        ...potential.map((path) => ({ path, message: 'path does not exist' }))
+        ...potential.map((path) => ({
+          path,
+          id,
+          message: 'path does not exist',
+        }))
       );
       const to = queryPaths(json, action.payload);
       failures.push(...to.failures);
@@ -235,7 +237,11 @@ export function splitIntoActionsWithDirectPaths(
     }
     case 'Copy': {
       failures.push(
-        ...potential.map((path) => ({ path, message: 'path does not exist' }))
+        ...potential.map((path) => ({
+          path,
+          id,
+          message: 'path does not exist',
+        }))
       );
       const to = queryPaths(json, action.payload);
       failures.push(...to.failures);
@@ -253,7 +259,11 @@ export function splitIntoActionsWithDirectPaths(
     }
     default:
       failures.push(
-        ...potential.map((path) => ({ path, message: 'path does not exist' }))
+        ...potential.map((path) => ({
+          path,
+          id,
+          message: 'path does not exist',
+        }))
       );
       return {
         actions: mapActionToList(action, (p) => {
