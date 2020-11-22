@@ -1,11 +1,6 @@
-import { describe, it } from 'mocha';
 import { expect } from 'chai';
-import {
-  compileJsonPath,
-  querySlots,
-  queryPaths,
-  queryValues,
-} from '../src/jsonpath';
+import { describe, it } from 'mocha';
+import { compileJsonPath, queryPaths, queryValues } from '../src/jsonpath';
 
 describe('JsonPath', function () {
   it('should compile a simple path', function () {
@@ -25,50 +20,223 @@ describe('JsonPath', function () {
   });
 
   it('should compile all JsonPath segment types', function () {
-    [
-      '$',
-      '$.foo',
-      '$["foo"]',
-      '$[1]',
-      '$..foo',
-      '$..[1]',
-      '$[(null)]',
-      '$[?(null)]',
-    ].forEach((it) => {
-      expect(compileJsonPath(it)).to.exist;
-    });
+    expect(compileJsonPath('$')).to.deep.equal([]);
+    expect(compileJsonPath('$.foo')).to.deep.equal([
+      { type: 'Key', query: 'foo' },
+    ]);
+    expect(compileJsonPath('$["foo"]')).to.deep.equal([
+      { type: 'Key', query: 'foo' },
+    ]);
+    expect(compileJsonPath("$['foo']")).to.deep.equal([
+      { type: 'Key', query: 'foo' },
+    ]);
+    expect(compileJsonPath('$[1]')).to.deep.equal([
+      { type: 'Index', query: 1 },
+    ]);
+    expect(compileJsonPath("$['foo','bar']")).to.deep.equal([
+      { type: 'MultiKey', query: ['foo', 'bar'] },
+    ]);
+    expect(compileJsonPath('$[1,2]')).to.deep.equal([
+      { type: 'MultiIndex', query: [1, 2] },
+    ]);
+    expect(compileJsonPath('$[:]')).to.deep.equal([
+      { type: 'Slice', query: {} },
+    ]);
+    expect(compileJsonPath('$[1:]')).to.deep.equal([
+      { type: 'Slice', query: { from: 1 } },
+    ]);
+    expect(compileJsonPath('$[:2]')).to.deep.equal([
+      { type: 'Slice', query: { to: 2 } },
+    ]);
+    expect(compileJsonPath('$[1:2]')).to.deep.equal([
+      { type: 'Slice', query: { from: 1, to: 2 } },
+    ]);
+    expect(compileJsonPath('$[1:2:3]')).to.deep.equal([
+      { type: 'Slice', query: { from: 1, to: 2, step: 3 } },
+    ]);
+    expect(compileJsonPath('$[(@):]')).to.deep.equal([
+      { type: 'ExprSlice', query: { from: ['self'] } },
+    ]);
+    expect(compileJsonPath('$[:(@)]')).to.deep.equal([
+      { type: 'ExprSlice', query: { to: ['self'] } },
+    ]);
+    expect(compileJsonPath('$[1:(@)]')).to.deep.equal([
+      { type: 'ExprSlice', query: { from: ['literal', 1], to: ['self'] } },
+    ]);
+    expect(compileJsonPath('$[1:2:(@)]')).to.deep.equal([
+      {
+        type: 'ExprSlice',
+        query: { from: ['literal', 1], to: ['literal', 2], step: ['self'] },
+      },
+    ]);
+    expect(compileJsonPath('$..foo')).to.deep.equal([
+      { type: 'Recursive', query: [{ type: 'Key', query: 'foo' }] },
+    ]);
+    expect(compileJsonPath('$..[1]')).to.deep.equal([
+      { type: 'Recursive', query: [{ type: 'Index', query: 1 }] },
+    ]);
+    expect(compileJsonPath('$[(@)]')).to.deep.equal([
+      { type: 'ExprIndex', query: [['self']] },
+    ]);
+    expect(compileJsonPath('$[?(@)]')).to.deep.equal([
+      { type: 'Filter', query: ['self'] },
+    ]);
   });
 
   it('should compile all JsonPath expression types', function () {
-    [
-      '$[(@)]',
-      '$[(@.foo)]',
-      '$[(@[1])]',
-      '$[(null)]',
-      '$[(true)]',
-      '$[(false)]',
-      '$[(3.14)]',
-      "$[('foo')]",
-      '$[("foo")]',
-      '$[(-(1))]',
-      '$[(!!1)]',
-      '$[(1 + 1)]',
-      '$[(1 - 1)]',
-      '$[(1 * 1)]',
-      '$[(1 / 1)]',
-      '$[(1 % 1)]',
-      '$[(1 < 1)]',
-      '$[(1 <= 1)]',
-      '$[(1 > 1)]',
-      '$[(1 >= 1)]',
-      '$[(1 == 1)]',
-      '$[(1 != 1)]',
-      '$[(1 && 1)]',
-      '$[(1 || 1)]',
-      '$[(1 ? 1 : 1)]',
-    ].forEach((it) => {
-      expect(compileJsonPath(it)).to.exist;
-    });
+    expect(
+      compileJsonPath('$[(@)]')
+    ).to.have.deep.nested.property('[0].query[0]', ['self']);
+    expect(
+      compileJsonPath('$[(@.foo)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      'subscript',
+      ['self'],
+      ['literal', 'foo'],
+    ]);
+    expect(
+      compileJsonPath('$[(@[1])]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      'subscript',
+      ['self'],
+      ['literal', 1],
+    ]);
+    expect(
+      compileJsonPath('$[(@.length)]')
+    ).to.have.deep.nested.property('[0].query[0]', ['length', ['self']]);
+    expect(
+      compileJsonPath('$[(null)]')
+    ).to.have.deep.nested.property('[0].query[0]', ['literal', null]);
+    expect(
+      compileJsonPath('$[(true)]')
+    ).to.have.deep.nested.property('[0].query[0]', ['literal', true]);
+    expect(
+      compileJsonPath('$[(false)]')
+    ).to.have.deep.nested.property('[0].query[0]', ['literal', false]);
+    expect(
+      compileJsonPath('$[(3.14)]')
+    ).to.have.deep.nested.property('[0].query[0]', ['literal', 3.14]);
+    expect(
+      compileJsonPath("$[('foo')]")
+    ).to.have.deep.nested.property('[0].query[0]', ['literal', 'foo']);
+    expect(
+      compileJsonPath('$[("foo")]')
+    ).to.have.deep.nested.property('[0].query[0]', ['literal', 'foo']);
+    expect(
+      compileJsonPath('$[(-(1))]')
+    ).to.have.deep.nested.property('[0].query[0]', ['neg', ['literal', 1]]);
+    expect(
+      compileJsonPath('$[(!!1)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '!',
+      ['!', ['literal', 1]],
+    ]);
+    expect(
+      compileJsonPath('$[(1 + 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '+',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 - 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '-',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 * 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '*',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 / 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '/',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 % 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '%',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 < 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '<',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 <= 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '<=',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 > 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '>',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 >= 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '>=',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 == 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '==',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 = 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '==',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 != 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '!=',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 && 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '&&',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 || 2)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '||',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[(1 ? 2 : 3)]')
+    ).to.have.deep.nested.property('[0].query[0]', [
+      'if',
+      ['literal', 1],
+      ['literal', 2],
+      ['literal', 3],
+    ]);
   });
 
   const fooBarJson = {
@@ -83,28 +251,28 @@ describe('JsonPath', function () {
     },
   };
 
-  it('should match a literal path with querySlots', function () {
-    expect(querySlots(fooBarJson, compileJsonPath('$.foo.bar'))).to.deep.equal([
-      ['foo', 'bar'],
-    ]);
+  it('should query an existing literal path', function () {
+    expect(queryPaths(fooBarJson, compileJsonPath('$.foo.bar'))).to.deep.equal({
+      existing: [['foo', 'bar']],
+      potential: [],
+      failures: [],
+    });
   });
 
-  it('should match a literal path with queryPaths', function () {
-    expect(queryPaths(fooBarJson, compileJsonPath('$.foo.bar'))).to.deep.equal([
-      ['foo', 'bar'],
-    ]);
+  it('should query a potential literal path', function () {
+    expect(queryPaths(fooBarJson, compileJsonPath('$.foo.qux'))).to.deep.equal({
+      existing: [],
+      potential: [['foo', 'qux']],
+      failures: [],
+    });
   });
 
-  it('should match a potential path with querySlots', function () {
-    expect(querySlots(fooBarJson, compileJsonPath('$.foo.qux'))).to.deep.equal([
-      ['foo', 'qux'],
-    ]);
-  });
-
-  it('should not match a potential path with queryPaths', function () {
-    expect(queryPaths(fooBarJson, compileJsonPath('$.foo.qux'))).to.deep.equal(
-      []
-    );
+  it('should report a failure on a query for a missing literal path', function () {
+    expect(queryPaths(fooBarJson, compileJsonPath('$.baz.qux'))).to.deep.equal({
+      existing: [],
+      potential: [],
+      failures: [{ path: ['baz'], message: 'path does not exist' }],
+    });
   });
 
   it('should extract a value with queryValues', function () {
@@ -113,16 +281,14 @@ describe('JsonPath', function () {
     ).to.deep.equal([1]);
   });
 
-  it('should match multiple paths with querySlots and ..', function () {
-    expect(querySlots(fooBarJson, compileJsonPath('$..bar')))
-      .to.have.length(3)
-      .and.to.deep.contain(['bar'])
-      .and.to.deep.contain(['bar', 'bar'])
-      .and.to.deep.contain(['foo', 'bar']);
-  });
-
-  it('should match multiple paths with queryPaths and ..', function () {
-    expect(queryPaths(fooBarJson, compileJsonPath('$..bar')))
+  it('should query multiple existing paths with ..', function () {
+    const { existing, potential, failures } = queryPaths(
+      fooBarJson,
+      compileJsonPath('$..bar')
+    );
+    expect(potential).to.be.empty;
+    expect(failures).to.be.empty;
+    expect(existing)
       .to.have.length(3)
       .and.to.deep.contain(['bar'])
       .and.to.deep.contain(['bar', 'bar'])

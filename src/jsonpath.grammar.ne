@@ -4,15 +4,17 @@
 @builtin "string.ne"
 @builtin "postprocessors.ne"
 
-Path -> (_ "$"):? (_ Segment):* _ {%
-  ([,segments,]) => segments.map(x => x[1])
+Path -> (_ "$"):? (_ Segment):* (_ RecursiveDescent):? _ {%
+  ([,segments,recursive,]) => [
+    ...segments.map(x => x[1]),
+    ...recursive ? [recursive[1]] : []
+  ]
 %}
 
 Segment ->
     Wildcard {% id %}
   | "." Identifier {% ([,id]) => ["key", id] %}
   | Subscript {% id %}
-  | RecursiveDescent {% id %}
 
 FirstSegment ->
     Wildcard {% id %}
@@ -37,7 +39,7 @@ SubscriptContent ->
   | Filter {% id %}
 
 Slice -> Index:? _ ":" Index:? (_ ":" Index):? _ {%
-    ([from,,to,step,]) => ["slice", from, to, step && step[2]]
+    ([from,,,to,step,]) => ["slice", from, to, step && step[2]]
   %}
 
 Filter -> _ "?(" Expression ")" _ {% ([,,expr,]) => ["filter", expr] %}
@@ -74,7 +76,7 @@ And ->
 
 Comparison ->
     Sum ("<"|"<="|"=="|"="|"!="|">="|">") Sum {%
-     ([l,[op],r]) => [op, l, r]
+      ([l,[op],r]) => [op === "=" ? "==" : op, l, r]
     %}
   | Sum {% id %}
 
@@ -97,11 +99,15 @@ Not ->
 ExprSubscript ->
   Atom ExprSuffix:* {%
     ([root, suffixes]) =>
-      suffixes.reduce((into, suffix) => ["subscript", into, suffix], root)
+      suffixes.reduce(
+        (into, suffix) =>
+          suffix ? ["subscript", into, suffix] : ["length", into],
+        root
+      )
   %}
 
 ExprSuffix ->
-    "." _ Identifier _ {% ([,,id,]) => ["literal", id] %}
+    "." _ Identifier _ {% ([,,id,]) => id !== "length" && ["literal", id] %}
   | "[" Expression "]" _ {% ([,expr,,]) => expr %}
 
 Atom -> _ (

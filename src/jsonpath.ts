@@ -1,11 +1,10 @@
-import isPlainObject from 'lodash.isplainobject';
+import { Draft } from 'immer';
 import flatMap from 'lodash.flatmap';
 import isEqual from 'lodash.isequal';
-import produce, { Draft } from 'immer';
+import isPlainObject from 'lodash.isplainobject';
 import nearley from 'nearley';
 import grammar from './jsonpath.grammar';
-import { Json, JsonObject, PathArray } from './types';
-import { IdMappedJson, PathToIdTree } from './path-to-id-tree';
+import { Failure, Json, JsonObject, PathArray, Timestamp } from './types';
 
 const isObject: (
   json: Draft<Json>
@@ -13,9 +12,12 @@ const isObject: (
 
 export type JsonPath = string;
 
-export type CompiledJsonPath = JsonPathSegment[];
+export type CompiledJsonPath = readonly JsonPathSegment[];
 
-export type CompiledJsonIdPath = JsonIdPathSegment[];
+export type CompiledJsonIdPath = readonly [
+  IdSegment | JsonPathSegment,
+  ...JsonPathSegment[]
+];
 
 export type JsonPathSegment =
   | WildcardSegment
@@ -28,8 +30,6 @@ export type JsonPathSegment =
   | ExprSliceSegment
   | FilterSegment
   | RecursiveSegment;
-
-export type JsonIdPathSegment = JsonPathSegment | IdSegment | MultiIdSegment;
 
 export type JsonPathExpr =
   | UnaryExpr
@@ -54,17 +54,17 @@ export interface IndexSegment {
 
 export interface MultiKeySegment {
   readonly type: 'MultiKey';
-  readonly query: string[];
+  readonly query: readonly [string, ...string[]];
 }
 
 export interface MultiIndexSegment {
   readonly type: 'MultiIndex';
-  readonly query: number[];
+  readonly query: readonly [number, ...number[]];
 }
 
 export interface ExprIndexSegment {
   readonly type: 'ExprIndex';
-  readonly query: JsonPathExpr[];
+  readonly query: readonly [JsonPathExpr, ...JsonPathExpr[]];
 }
 
 export interface SliceSegment {
@@ -92,17 +92,15 @@ export interface FilterSegment {
 
 export interface RecursiveSegment {
   readonly type: 'Recursive';
-  readonly query: JsonPathSegment[];
+  readonly query: readonly [JsonPathSegment, ...JsonPathSegment[]];
 }
 
 export interface IdSegment {
   readonly type: 'Id';
-  readonly query: string;
-}
-
-export interface MultiIdSegment {
-  readonly type: 'MultiId';
-  readonly query: string[];
+  readonly query: {
+    id: Timestamp;
+    path: PathArray;
+  };
 }
 
 export type UnaryExpr = readonly ['neg' | '!', JsonPathExpr];
@@ -264,136 +262,308 @@ export function evalJsonPathExpr(self: Json, expr: JsonPathExpr): Json {
   }
 }
 
-function querySlots1(json: Json, segment: JsonPathSegment): PathArray[] {
+function adjustIndex(index: number, array: any[]): number {
+  let i = Math.floor(index);
+  const len = array.length;
+  if (len > 0) while (i < 0) i += len;
+  return i;
+}
+
+function queryPaths1(
+  json: Json,
+  segment: JsonPathSegment
+): {
+  existing: PathArray[];
+  potential: PathArray[];
+  failures: Failure[];
+} {
+  let existing: PathArray[] = [];
+  let potential: PathArray[] = [];
+  let failures: Failure[] = [];
   switch (segment.type) {
     case 'Wildcard':
       if (Array.isArray(json)) {
-        return json.map((x, i) => [i]);
+        existing = json.map((x, i) => [i]);
+      } else if (isObject(json)) {
+        existing = Object.keys(json).map((x) => [x]);
       }
-      if (isObject(json)) {
-        return Object.keys(json).map((x) => [x]);
-      }
-      return [];
+      break;
     case 'Key':
-      return isObject(json) ? [[segment.query]] : [];
+      if (isObject(json)) {
+        if (Object.prototype.hasOwnProperty.call(json, segment.query)) {
+          existing.push([segment.query]);
+        } else {
+          potential.push([segment.query]);
+        }
+      } else {
+        failures.push({
+          path: [segment.query],
+          message: 'path does not exist',
+        });
+      }
+      break;
     case 'Index':
-      return Array.isArray(json) && segment.query >= 0 ? [[segment.query]] : [];
+      if (Array.isArray(json)) {
+        if (segment.query < json.length) {
+          existing.push([adjustIndex(segment.query, json)]);
+        } else {
+          potential.push([segment.query]);
+        }
+      } else {
+        failures.push({
+          path: [segment.query],
+          message: 'path does not exist',
+        });
+      }
+      break;
     case 'MultiKey':
-      return isObject(json) ? segment.query.map((x) => [x]) : [];
+      if (isObject(json)) {
+        segment.query.forEach((key) => {
+          if (Object.prototype.hasOwnProperty.call(json, key))
+            existing.push([key]);
+          else potential.push([key]);
+        });
+      } else {
+        failures = segment.query.map((x) => ({
+          path: [x],
+          message: 'path does not exist',
+        }));
+      }
+      break;
     case 'MultiIndex':
-      return Array.isArray(json)
-        ? segment.query.filter((x) => x >= 0).map((x) => [x])
-        : [];
+      if (Array.isArray(json)) {
+        segment.query.forEach((key) => {
+          if (key < json.length) existing.push([adjustIndex(key, json)]);
+          else potential.push([key]);
+        });
+      } else {
+        failures = segment.query.map((x) => ({
+          path: [x],
+          message: 'path does not exist',
+        }));
+      }
+      break;
     case 'ExprIndex':
-      return segment.query
-        .map((expr) => evalJsonPathExpr(json, expr))
-        .filter(
-          (x) =>
-            (Array.isArray(json) && typeof x === 'number') ||
-            (isObject(json) && typeof x === 'string')
-        )
-        .map((x) => [x as string | number]);
-    case 'Slice': {
-      if (!Array.isArray(json)) return [];
-      const { from = 0, to = json.length, step = 1 } = segment.query;
-      const paths: PathArray[] = [];
-      for (let i = from; i < Math.min(json.length, to); i += step) {
-        paths.push([i]);
+      segment.query.forEach((expr) => {
+        let key: Json;
+        try {
+          key = evalJsonPathExpr(json, expr);
+        } catch (e) {
+          failures.push({
+            path: [],
+            message: `[JsonPath expression] ${e?.message || e}`,
+          });
+          return;
+        }
+        if (typeof key === 'string') {
+          if (isObject(json)) {
+            if (Object.prototype.hasOwnProperty.call(json, key)) {
+              existing.push([key]);
+            } else {
+              potential.push([key]);
+            }
+          } else {
+            failures.push({
+              path: [key],
+              message: 'path does not exist',
+            });
+          }
+        } else if (typeof key === 'number') {
+          if (Array.isArray(json)) {
+            if (key < json.length) {
+              existing.push([adjustIndex(key, json)]);
+            } else {
+              potential.push([key]);
+            }
+          } else {
+            failures.push({
+              path: [key],
+              message: 'path does not exist',
+            });
+          }
+        } else {
+          failures.push({
+            path: [],
+            message: `[JsonPath expression] subscript: ${JSON.stringify(
+              key
+            )} is not a valid index or key`,
+          });
+        }
+      });
+      break;
+    case 'Slice':
+      if (Array.isArray(json)) {
+        const { from = 0, to = json.length, step = 1 } = segment.query;
+        if (step === 0) {
+          failures.push({
+            path: [],
+            message: 'slice step cannot be 0',
+          });
+          break;
+        }
+        const start = adjustIndex(step > 0 ? from : to, json);
+        const end = adjustIndex(step > 0 ? to : from, json);
+        for (let i = start; i < end; i += step) {
+          if (i < json.length) existing.push([i]);
+          else potential.push([i]);
+        }
+      } else {
+        failures.push({
+          path: [],
+          message: 'slice on non-array',
+        });
       }
-      return paths;
-    }
-    case 'ExprSlice': {
-      if (!Array.isArray(json)) return [];
-      const from = segment.query.from
-        ? expectNumber('slice', evalJsonPathExpr(json, segment.query.from))
-        : 0;
-      const to = segment.query.to
-        ? expectNumber('slice', evalJsonPathExpr(json, segment.query.to))
-        : json.length;
-      const step = segment.query.step
-        ? expectNumber('slice', evalJsonPathExpr(json, segment.query.step))
-        : 1;
-      const paths: PathArray[] = [];
-      for (let i = from; i < Math.min(json.length, to); i += step) {
-        paths.push([i]);
+      break;
+    case 'ExprSlice':
+      if (Array.isArray(json)) {
+        let from = 0;
+        let to = json.length;
+        let step = 1;
+        try {
+          if (segment.query.from) {
+            from = expectNumber(
+              'slice',
+              evalJsonPathExpr(json, segment.query.from)
+            );
+          }
+          if (segment.query.to) {
+            to = expectNumber(
+              'slice',
+              evalJsonPathExpr(json, segment.query.to)
+            );
+          }
+          if (segment.query.step) {
+            step = Math.floor(
+              expectNumber('slice', evalJsonPathExpr(json, segment.query.step))
+            );
+          }
+        } catch (e) {
+          failures.push({
+            path: [],
+            message: `[JsonPath expression] ${e?.message || e}`,
+          });
+          break;
+        }
+        if (step === 0) {
+          failures.push({
+            path: [],
+            message: 'slice step cannot be 0',
+          });
+          break;
+        }
+        const start = adjustIndex(step > 0 ? from : to, json);
+        const end = adjustIndex(step > 0 ? to : from, json);
+        for (let i = start; i < end; i += step) {
+          if (i < json.length) existing.push([i]);
+          else potential.push([i]);
+        }
+      } else {
+        failures.push({
+          path: [],
+          message: 'slice on non-array',
+        });
       }
-      return paths;
-    }
+      break;
     case 'Filter':
       if (Array.isArray(json)) {
-        return flatMap(json, (x, i) =>
-          evalJsonPathExpr(x, segment.query) ? [[i]] : []
-        );
+        json.forEach((x, i) => {
+          try {
+            if (evalJsonPathExpr(x, segment.query)) {
+              existing.push([i]);
+            }
+          } catch (e) {
+            failures.push({
+              path: [i],
+              message: `[JsonPath expression] ${e?.message || e}`,
+            });
+          }
+        });
+      } else if (isObject(json)) {
+        Object.entries(json).forEach(([k, v]) => {
+          try {
+            if (evalJsonPathExpr(v, segment.query)) {
+              existing.push([k]);
+            }
+          } catch (e) {
+            failures.push({
+              path: [k],
+              message: `[JsonPath expression] ${e?.message || e}`,
+            });
+          }
+        });
+      } else {
+        failures.push({
+          path: [],
+          message: 'filter on non-array, non-object',
+        });
       }
-      if (isObject(json)) {
-        return flatMap(Object.entries(json), ([k, v]) =>
-          evalJsonPathExpr(v, segment.query) ? [[k]] : []
-        );
-      }
-      return [];
+      break;
     case 'Recursive':
       if (Array.isArray(json)) {
-        return [
-          ...querySlots(json, segment.query),
+        existing.push(
+          ...queryPaths(json, segment.query).existing,
           ...flatMap(json, (x, i) =>
-            querySlots1(x, segment).map((p) => [i, ...p])
-          ),
-        ];
-      }
-      if (isObject(json)) {
-        return [
-          ...querySlots(json, segment.query),
+            queryPaths1(x, segment).existing.map((p) => [i, ...p])
+          )
+        );
+      } else if (isObject(json)) {
+        existing.push(
+          ...queryPaths(json, segment.query).existing,
           ...flatMap(Object.entries(json), ([k, v]) =>
-            querySlots1(v, segment).map((p) => [k, ...p])
-          ),
-        ];
+            queryPaths1(v, segment).existing.map((p) => [k, ...p])
+          )
+        );
       }
-      return [];
   }
-}
-
-function queryPaths1(json: Json, segment: JsonPathSegment): PathArray[] {
-  return querySlots1(json, segment).filter(
-    (p) => p.reduce((j, i) => j?.[i], json) !== undefined
-  );
+  return { existing, potential, failures };
 }
 
 function queryValues1(json: Json, segment: JsonPathSegment): Json[] {
-  return querySlots1(json, segment)
-    .map((p) => p.reduce((j, i) => j?.[i], json))
+  return queryPaths1(json, segment)
+    .existing.map((p) => p.reduce((j, i) => j?.[i], json))
     .filter((x) => x !== undefined);
 }
 
-export function querySlots(json: Json, path: CompiledJsonPath): PathArray[] {
-  return path
+export function queryPaths(
+  json: Json,
+  jsonPath: CompiledJsonPath
+): {
+  existing: PathArray[];
+  potential: PathArray[];
+  failures: Failure[];
+} {
+  const potential: PathArray[] = [];
+  const failures: Failure[] = [];
+  const existing = jsonPath
     .reduce<{ json: Json; path: PathArray }[]>(
-      (paths, segment, i) => {
-        const query = i < path.length - 1 ? queryPaths1 : querySlots1;
-        return flatMap(paths, ({ json, path }) =>
-          query(json, segment).map((p) => ({
+      (paths, segment, i) =>
+        flatMap(paths, ({ json, path }) => {
+          const result = queryPaths1(json, segment);
+          failures.push(
+            ...result.failures.map((f) => ({
+              ...f,
+              path: [...path, ...f.path],
+            }))
+          );
+          if (i === jsonPath.length - 1) {
+            potential.push(...result.potential.map((p) => [...path, ...p]));
+          } else {
+            failures.push(
+              ...result.potential.map((p) => ({
+                path: [...path, ...p],
+                message: 'path does not exist',
+              }))
+            );
+          }
+          return result.existing.map((p) => ({
             json: p.reduce((j, i) => j?.[i], json),
             path: [...path, ...p],
-          }))
-        );
-      },
+          }));
+        }),
       [{ json, path: [] }]
     )
     .map((x) => x.path);
-}
-
-export function queryPaths(json: Json, path: CompiledJsonPath): PathArray[] {
-  return path
-    .reduce<{ json: Json; path: PathArray }[]>(
-      (paths, segment) =>
-        flatMap(paths, ({ json, path }) =>
-          queryPaths1(json, segment).map((p) => ({
-            json: p.reduce((j, i) => j?.[i], json),
-            path: [...path, ...p],
-          }))
-        ),
-      [{ json, path: [] }]
-    )
-    .map((x) => x.path);
+  return { existing, potential, failures };
 }
 
 export function queryValues(json: Json, path: CompiledJsonPath): Json[] {
@@ -403,7 +573,62 @@ export function queryValues(json: Json, path: CompiledJsonPath): Json[] {
   );
 }
 
-function compileIndex(index: [string, ...any]): JsonPathExpr {
+export function isSingularPath(
+  path: CompiledJsonPath | CompiledJsonIdPath
+): boolean {
+  return path.every((p: JsonPathSegment | IdSegment) => {
+    switch (p.type) {
+      case 'Key':
+      case 'Index':
+      case 'Id':
+        return true;
+      case 'MultiIndex':
+      case 'MultiKey':
+      case 'ExprIndex':
+        return p.query.length === 1;
+      default:
+        return false;
+    }
+  });
+}
+
+export function splitIntoSingularPaths(
+  path: CompiledJsonPath
+): CompiledJsonPath[] {
+  let paths: JsonPathSegment[][] = [[]];
+  for (let i = 0; i < path.length; i++) {
+    const segment = path[i];
+    switch (segment.type) {
+      case 'Key':
+      case 'Index':
+        paths.forEach((p) => p.push(segment));
+        break;
+      case 'MultiIndex':
+        paths = flatMap(segment.query, (query) =>
+          paths.map((p) => [...p, { type: 'Index', query } as IndexSegment])
+        );
+        break;
+      case 'MultiKey':
+        paths = flatMap(segment.query, (query) =>
+          paths.map((p) => [...p, { type: 'Key', query } as KeySegment])
+        );
+        break;
+      case 'ExprIndex':
+        paths = flatMap(segment.query, (expr) =>
+          paths.map((p) => [
+            ...p,
+            { type: 'ExprIndex', query: [expr] } as ExprIndexSegment,
+          ])
+        );
+        break;
+      default:
+        return paths.map((p) => [...p, ...path.slice(i)]);
+    }
+  }
+  return paths;
+}
+
+function compileIndex(index: [string, ...any[]]): JsonPathExpr {
   switch (index[0]) {
     case 'expression':
       return index[1];
@@ -411,11 +636,11 @@ function compileIndex(index: [string, ...any]): JsonPathExpr {
     case 'key':
       return ['literal', index[1]];
     default:
-      throw new Error(`not an index: ${index}`);
+      throw new Error(`not an index: ${JSON.stringify(index)}`);
   }
 }
 
-function compileSegment(segment: [string, ...any]): JsonPathSegment {
+function compileSegment(segment: [string, ...any[]]): JsonPathSegment {
   switch (segment[0]) {
     case 'key':
       return { type: 'Key', query: segment[1] };
@@ -426,34 +651,41 @@ function compileSegment(segment: [string, ...any]): JsonPathSegment {
     case 'filter':
       return { type: 'Filter', query: segment[1] };
     case 'multi':
-      if (segment.slice(1).every((i) => i[0] === 'index')) {
-        return { type: 'MultiIndex', query: segment.slice(1).map((x) => x[1]) };
-      }
-      if (segment.slice(1).every((i) => i[0] === 'key')) {
-        return { type: 'MultiKey', query: segment.slice(1).map((x) => x[1]) };
-      }
-      return { type: 'ExprIndex', query: segment.slice(1).map(compileIndex) };
-    case 'slice':
-      if (segment.slice(1, 4).every((i) => i[0] === 'index')) {
+      const subscripts = segment.slice(1);
+      if (subscripts.every((i) => i[0] === 'index')) {
         return {
-          type: 'Slice',
-          query: {
-            from: segment[1]?.[1],
-            to: segment[2]?.[1],
-            step: segment[3]?.[1],
-          },
+          type: 'MultiIndex',
+          query: subscripts.map((x) => x[1]) as [any, ...any[]],
+        };
+      }
+      if (subscripts.every((i) => i[0] === 'key')) {
+        return {
+          type: 'MultiKey',
+          query: subscripts.map((x) => x[1]) as [any, ...any[]],
         };
       }
       return {
-        type: 'ExprSlice',
-        query: {
-          from: segment[1] && compileIndex(segment[1]),
-          to: segment[2] && compileIndex(segment[2]),
-          step: segment[3] && compileIndex(segment[3]),
-        },
+        type: 'ExprIndex',
+        query: subscripts.map(compileIndex) as [any, ...any[]],
       };
+    case 'slice': {
+      const query: any = {};
+      if (segment.slice(1, 4).every((i) => !i || i[0] === 'index')) {
+        if (segment[1]?.[1]) query.from = segment[1][1];
+        if (segment[2]?.[1]) query.to = segment[2][1];
+        if (segment[3]?.[1]) query.step = segment[3][1];
+        return { type: 'Slice', query };
+      }
+      if (segment[1]) query.from = compileIndex(segment[1]);
+      if (segment[2]) query.to = compileIndex(segment[2]);
+      if (segment[3]) query.step = compileIndex(segment[3]);
+      return { type: 'ExprSlice', query };
+    }
     case 'recursive':
-      return { type: 'Recursive', query: segment.slice(1).map(compileSegment) };
+      return {
+        type: 'Recursive',
+        query: segment.slice(1).map(compileSegment) as [any, ...any[]],
+      };
     case 'wildcard':
       return { type: 'Wildcard' };
     default:

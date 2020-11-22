@@ -365,10 +365,20 @@ const grammar: Grammar = {
       symbols: ['Path$ebnf$2', 'Path$ebnf$2$subexpression$1'],
       postprocess: (d) => d[0].concat([d[1]]),
     },
+    { name: 'Path$ebnf$3$subexpression$1', symbols: ['_', 'RecursiveDescent'] },
+    {
+      name: 'Path$ebnf$3',
+      symbols: ['Path$ebnf$3$subexpression$1'],
+      postprocess: id,
+    },
+    { name: 'Path$ebnf$3', symbols: [], postprocess: () => null },
     {
       name: 'Path',
-      symbols: ['Path$ebnf$1', 'Path$ebnf$2', '_'],
-      postprocess: ([, segments]) => segments.map((x) => x[1]),
+      symbols: ['Path$ebnf$1', 'Path$ebnf$2', 'Path$ebnf$3', '_'],
+      postprocess: ([, segments, recursive]) => [
+        ...segments.map((x) => x[1]),
+        ...(recursive ? [recursive[1]] : []),
+      ],
     },
     { name: 'Segment', symbols: ['Wildcard'], postprocess: id },
     {
@@ -377,7 +387,6 @@ const grammar: Grammar = {
       postprocess: ([, id]) => ['key', id],
     },
     { name: 'Segment', symbols: ['Subscript'], postprocess: id },
-    { name: 'Segment', symbols: ['RecursiveDescent'], postprocess: id },
     { name: 'FirstSegment', symbols: ['Wildcard'], postprocess: id },
     {
       name: 'FirstSegment',
@@ -466,7 +475,12 @@ const grammar: Grammar = {
         'Slice$ebnf$3',
         '_',
       ],
-      postprocess: ([from, , to, step]) => ['slice', from, to, step && step[2]],
+      postprocess: ([from, , , to, step]) => [
+        'slice',
+        from,
+        to,
+        step && step[2],
+      ],
     },
     {
       name: 'Filter$string$1',
@@ -589,7 +603,7 @@ const grammar: Grammar = {
     {
       name: 'Comparison',
       symbols: ['Sum', 'Comparison$subexpression$1', 'Sum'],
-      postprocess: ([l, [op], r]) => [op, l, r],
+      postprocess: ([l, [op], r]) => [op === '=' ? '==' : op, l, r],
     },
     { name: 'Comparison', symbols: ['Sum'], postprocess: id },
     { name: 'Sum$subexpression$1', symbols: [{ literal: '+' }] },
@@ -631,12 +645,16 @@ const grammar: Grammar = {
       name: 'ExprSubscript',
       symbols: ['Atom', 'ExprSubscript$ebnf$1'],
       postprocess: ([root, suffixes]) =>
-        suffixes.reduce((into, suffix) => ['subscript', into, suffix], root),
+        suffixes.reduce(
+          (into, suffix) =>
+            suffix ? ['subscript', into, suffix] : ['length', into],
+          root
+        ),
     },
     {
       name: 'ExprSuffix',
       symbols: [{ literal: '.' }, '_', 'Identifier', '_'],
-      postprocess: ([, , id]) => ['literal', id],
+      postprocess: ([, , id]) => id !== 'length' && ['literal', id],
     },
     {
       name: 'ExprSuffix',

@@ -1,10 +1,4 @@
-import { JsonPath } from './jsonpath';
-import { PathArray } from './types';
-
-export interface Failure {
-  path: JsonPath | PathArray;
-  message: string;
-}
+import { Failure, Uuid } from './types';
 
 export interface MergeFailureEvent {
   event: 'MergeFailure';
@@ -15,7 +9,7 @@ export interface PeerEvent {
   event: 'PeerAppeared' | 'PeerDisappeared';
   payload: {
     address: string;
-    uuid: string;
+    uuid: Uuid;
     paired: boolean;
   };
 }
@@ -25,7 +19,7 @@ export interface JoinRequestEvent {
   payload: {
     pin: string;
     address: string;
-    uuid: string;
+    uuid: Uuid;
     message: string;
     groupName: string;
     groupUuid: string;
@@ -36,7 +30,7 @@ export interface JoinedEvent {
   event: 'Joined';
   payload: {
     groupName: string;
-    groupUuid: string;
+    groupUuid: Uuid;
   };
 }
 
@@ -44,7 +38,7 @@ export interface PinGeneratedEvent {
   event: 'PinGenerated';
   payload: {
     pin: string;
-    uuid: string;
+    uuid: Uuid;
   };
 }
 
