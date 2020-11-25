@@ -239,6 +239,36 @@ describe('JsonPath', function () {
     ]);
   });
 
+  it('should compile paths with expression variables', function () {
+    expect(
+      compileJsonPath('$[({foo} + {bar})]', { foo: 1, bar: 2 })
+    ).to.have.deep.nested.property('[0].query[0]', [
+      '+',
+      ['literal', 1],
+      ['literal', 2],
+    ]);
+    expect(
+      compileJsonPath('$[({0}.{1})]', [[1, 2, 3], 2])
+    ).to.have.deep.nested.property('[0].query[0]', [
+      'subscript',
+      ['literal', [1, 2, 3]],
+      ['literal', 2],
+    ]);
+  });
+
+  it('should compile paths with subscript variables', function () {
+    expect(
+      compileJsonPath('$.{foo}[{bar}]', { foo: 'qux', bar: 2 })
+    ).to.deep.equal([
+      { type: 'ExprIndex', query: [['literal', 'qux']] },
+      { type: 'ExprIndex', query: [['literal', 2]] },
+    ]);
+    expect(compileJsonPath('$[{0}].{1}', ['qux', 2])).to.deep.equal([
+      { type: 'ExprIndex', query: [['literal', 'qux']] },
+      { type: 'ExprIndex', query: [['literal', 2]] },
+    ]);
+  });
+
   const fooBarJson = {
     foo: {
       bar: 1,

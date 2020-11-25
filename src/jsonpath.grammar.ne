@@ -14,11 +14,13 @@ Path -> (_ "$"):? (_ Segment):* (_ RecursiveDescent):? _ {%
 Segment ->
     Wildcard {% id %}
   | "." Identifier {% ([,id]) => ["key", id] %}
+  | "." Variable {% ([,v]) => ["expression", v] %}
   | Subscript {% id %}
 
 FirstSegment ->
     Wildcard {% id %}
   | Identifier {% ([id]) => ["key", id] %}
+  | Variable {% ([v]) => ["expression", v] %}
   | Subscript {% id %}
 
 RecursiveDescent ->
@@ -46,6 +48,7 @@ Filter -> _ "?(" Expression ")" _ {% ([,,expr,]) => ["filter", expr] %}
 
 Index ->
     _ int _ {% ([,n,]) => ["index", n] %}
+  | _ Variable _ {% ([,v,]) => ["expression", v] %}
   | _ "(" Expression ")" _ {% ([,,expr,,]) => ["expression", expr] %}
 
 KeyOrIndex ->
@@ -108,7 +111,8 @@ ExprSubscript ->
 
 ExprSuffix ->
     "." _ Identifier _ {% ([,,id,]) => id !== "length" && ["literal", id] %}
-  | "[" Expression "]" _ {% ([,expr,,]) => expr %}
+  | "." _ Variable _ {% nth(2) %}
+  | "[" Expression "]" _ {% nth(1) %}
 
 Atom -> _ (
       "(" Expression ")" {% nth(1) %}
@@ -125,7 +129,7 @@ Call -> Identifier _ "(" (Expression ("," Expression):*):? ")" {%
         : ["call", name]
   %}
 
-Variable -> "$" Identifier {% ([,id]) => ["variable", id] %}
+Variable ->  "{" _ (int | Identifier) _ "}" {% ([,,id,,]) => ["variable", id] %}
 
 Literal ->
     decimal {% ([x]) => ["literal", x] %}

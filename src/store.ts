@@ -14,7 +14,9 @@ import {
   CompiledJsonIdPath,
   CompiledJsonPath,
   compileJsonPath,
+  compileJsonPathAction,
   JsonPath,
+  JsonPathDataAction,
   splitIntoSingularPaths,
 } from './jsonpath';
 import {
@@ -109,11 +111,13 @@ export class Store {
       });
   }
 
-  dispatch(action: DataAction<JsonPath>): Failure[] {
-    const processedActions = mapActionToList(action, (path) =>
-      splitIntoSingularPaths(compileJsonPath(path)).map((path) =>
-        anchorPathToId(this.state, path)
-      )
+  dispatch(action: JsonPathDataAction): Failure[] {
+    const processedActions = mapActionToList(
+      compileJsonPathAction(action),
+      (path) =>
+        splitIntoSingularPaths(path).map((path) =>
+          anchorPathToId(this.state, path)
+        )
     );
     const ops: Op[] = processedActions.map((action) => {
       const timestamp: Timestamp = { author: this.uuid, index: this.nextIndex };

@@ -85,8 +85,14 @@ describe('Store', function () {
     const store = new Store(saveState);
     ['foo', 'bar', 'baz', 'qux', 'quux', 'corge', 'grault', 'garply'].forEach(
       (key, payload) => {
-        expect(store.dispatch({ action: 'Set', path: `$.${key}`, payload })).to
-          .be.empty;
+        expect(
+          store.dispatch({
+            action: 'Set',
+            path: '$.{key}',
+            vars: { key },
+            payload,
+          })
+        ).to.be.empty;
       }
     );
     const ts = (index) => ({ author: UUID1, index });

@@ -386,12 +386,22 @@ const grammar: Grammar = {
       symbols: [{ literal: '.' }, 'Identifier'],
       postprocess: ([, id]) => ['key', id],
     },
+    {
+      name: 'Segment',
+      symbols: [{ literal: '.' }, 'Variable'],
+      postprocess: ([, v]) => ['expression', v],
+    },
     { name: 'Segment', symbols: ['Subscript'], postprocess: id },
     { name: 'FirstSegment', symbols: ['Wildcard'], postprocess: id },
     {
       name: 'FirstSegment',
       symbols: ['Identifier'],
       postprocess: ([id]) => ['key', id],
+    },
+    {
+      name: 'FirstSegment',
+      symbols: ['Variable'],
+      postprocess: ([v]) => ['expression', v],
     },
     { name: 'FirstSegment', symbols: ['Subscript'], postprocess: id },
     {
@@ -496,6 +506,11 @@ const grammar: Grammar = {
       name: 'Index',
       symbols: ['_', 'int', '_'],
       postprocess: ([, n]) => ['index', n],
+    },
+    {
+      name: 'Index',
+      symbols: ['_', 'Variable', '_'],
+      postprocess: ([, v]) => ['expression', v],
     },
     {
       name: 'Index',
@@ -658,8 +673,13 @@ const grammar: Grammar = {
     },
     {
       name: 'ExprSuffix',
+      symbols: [{ literal: '.' }, '_', 'Variable', '_'],
+      postprocess: nth(2),
+    },
+    {
+      name: 'ExprSuffix',
       symbols: [{ literal: '[' }, 'Expression', { literal: ']' }, '_'],
-      postprocess: ([, expr, ,]) => expr,
+      postprocess: nth(1),
     },
     {
       name: 'Atom$subexpression$1',
@@ -712,10 +732,18 @@ const grammar: Grammar = {
           ? ['call', name, args[0], ...args[1].map((x) => x[1])]
           : ['call', name],
     },
+    { name: 'Variable$subexpression$1', symbols: ['int'] },
+    { name: 'Variable$subexpression$1', symbols: ['Identifier'] },
     {
       name: 'Variable',
-      symbols: [{ literal: '$' }, 'Identifier'],
-      postprocess: ([, id]) => ['variable', id],
+      symbols: [
+        { literal: '{' },
+        '_',
+        'Variable$subexpression$1',
+        '_',
+        { literal: '}' },
+      ],
+      postprocess: ([, , id, ,]) => ['variable', id],
     },
     {
       name: 'Literal',

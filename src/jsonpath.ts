@@ -3,6 +3,7 @@ import flatMap from 'lodash.flatmap';
 import isEqual from 'lodash.isequal';
 import isPlainObject from 'lodash.isplainobject';
 import nearley from 'nearley';
+import { DataAction, mapAction, ScalarAction } from './actions';
 import grammar from './jsonpath.grammar';
 import { Failure, Json, JsonObject, PathArray, Timestamp } from './types';
 
@@ -18,6 +19,19 @@ export type CompiledJsonIdPath = readonly [
   IdSegment | JsonPathSegment,
   ...JsonPathSegment[]
 ];
+
+export type Vars = { readonly [name: string]: Json } | readonly Json[];
+
+export type JsonPathScalarAction = ScalarAction<JsonPath> & {
+  readonly vars?: Vars;
+};
+
+export interface JsonPathTransaction {
+  action: 'Transaction';
+  payload: JsonPathScalarAction[];
+}
+
+export type JsonPathDataAction = JsonPathTransaction | JsonPathScalarAction;
 
 export type JsonPathSegment =
   | WildcardSegment
@@ -128,10 +142,7 @@ export type BinaryExpr = readonly [
 
 export type IfExpr = readonly ['if', JsonPathExpr, JsonPathExpr, JsonPathExpr];
 
-export type LiteralExpr = readonly [
-  'literal',
-  number | string | boolean | null
-];
+export type LiteralExpr = readonly ['literal', Json];
 
 export class ExprError extends Error {
   constructor(message: string) {
@@ -628,73 +639,143 @@ export function splitIntoSingularPaths(
   return paths;
 }
 
-function compileIndex(index: [string, ...any[]]): JsonPathExpr {
+function interpolateExpr([car, ...cdr]: readonly [string, ...any[]]): (
+  vars: Vars
+) => JsonPathExpr {
+  if (car === 'variable') {
+    const [varName] = cdr;
+    return (vars) => {
+      if (varName in vars) return ['literal', vars[varName]];
+      throw new Error(`missing variable in JsonPath: {${varName}}`);
+    };
+  }
+  const interpolated = cdr.map((e) =>
+    Array.isArray(e) && typeof e[0] === 'string'
+      ? interpolateExpr(e as any)
+      : () => e
+  );
+  return (vars) => [car, ...interpolated.map((e) => e(vars))] as any;
+}
+
+function compileIndex(
+  index: readonly [string, ...any[]]
+): (vars: Vars) => JsonPathExpr {
   switch (index[0]) {
     case 'expression':
-      return index[1];
+      return interpolateExpr(index[1]);
     case 'index':
     case 'key':
-      return ['literal', index[1]];
+      return () => ['literal', index[1]];
     default:
       throw new Error(`not an index: ${JSON.stringify(index)}`);
   }
 }
 
-function compileSegment(segment: [string, ...any[]]): JsonPathSegment {
+function compileSegment(
+  segment: readonly [string, ...any[]]
+): (vars: Vars) => JsonPathSegment {
+  let seg: JsonPathSegment;
   switch (segment[0]) {
     case 'key':
-      return { type: 'Key', query: segment[1] };
+      seg = { type: 'Key', query: segment[1] };
+      break;
     case 'index':
-      return { type: 'Index', query: segment[1] };
-    case 'expression':
-      return { type: 'ExprIndex', query: [segment[1]] };
+      seg = { type: 'Index', query: segment[1] };
+      break;
+    case 'expression': {
+      const expr = interpolateExpr(segment[1]);
+      return (vars) => ({ type: 'ExprIndex', query: [expr(vars)] });
+    }
     case 'filter':
-      return { type: 'Filter', query: segment[1] };
+      seg = { type: 'Filter', query: segment[1] };
+      break;
     case 'multi':
       const subscripts = segment.slice(1);
       if (subscripts.every((i) => i[0] === 'index')) {
-        return {
+        seg = {
           type: 'MultiIndex',
           query: subscripts.map((x) => x[1]) as [any, ...any[]],
         };
-      }
-      if (subscripts.every((i) => i[0] === 'key')) {
-        return {
+      } else if (subscripts.every((i) => i[0] === 'key')) {
+        seg = {
           type: 'MultiKey',
           query: subscripts.map((x) => x[1]) as [any, ...any[]],
         };
+      } else {
+        const exprs = subscripts.map(compileIndex);
+        return (vars) => ({
+          type: 'ExprIndex',
+          query: exprs.map((e) => e(vars)) as [any, ...any[]],
+        });
       }
-      return {
-        type: 'ExprIndex',
-        query: subscripts.map(compileIndex) as [any, ...any[]],
-      };
+      break;
     case 'slice': {
-      const query: any = {};
       if (segment.slice(1, 4).every((i) => !i || i[0] === 'index')) {
+        const query: any = {};
         if (segment[1]?.[1]) query.from = segment[1][1];
         if (segment[2]?.[1]) query.to = segment[2][1];
         if (segment[3]?.[1]) query.step = segment[3][1];
-        return { type: 'Slice', query };
+        seg = { type: 'Slice', query };
+        break;
       }
-      if (segment[1]) query.from = compileIndex(segment[1]);
-      if (segment[2]) query.to = compileIndex(segment[2]);
-      if (segment[3]) query.step = compileIndex(segment[3]);
-      return { type: 'ExprSlice', query };
-    }
-    case 'recursive':
-      return {
-        type: 'Recursive',
-        query: segment.slice(1).map(compileSegment) as [any, ...any[]],
+      const from = segment[1] && compileIndex(segment[1]);
+      const to = segment[2] && compileIndex(segment[2]);
+      const step = segment[3] && compileIndex(segment[3]);
+      return (vars) => {
+        const query: any = {};
+        if (from) query.from = from(vars);
+        if (to) query.to = to(vars);
+        if (step) query.step = step(vars);
+        return { type: 'ExprSlice', query };
       };
+    }
+    case 'recursive': {
+      const segs = segment.slice(1).map(compileSegment);
+      return (vars) => ({
+        type: 'Recursive',
+        query: segs.map((f) => f(vars)) as [any, ...any[]],
+      });
+    }
     case 'wildcard':
-      return { type: 'Wildcard' };
+      seg = { type: 'Wildcard' };
+      break;
     default:
       throw new Error(`not a segment: ${segment}`);
   }
+  return () => seg;
 }
 
-export function compileJsonPath(path: JsonPath): CompiledJsonPath {
+const compileCache = new Map<string, (vars: Vars) => CompiledJsonPath>();
+
+function compileUncachedJsonPath(
+  path: JsonPath
+): (vars: Vars) => CompiledJsonPath {
   const parser = new nearley.Parser(nearley.Grammar.fromCompiled(grammar));
   parser.feed(path);
-  return parser.results[0].map(compileSegment);
+  const segments = parser.results[0].map(compileSegment);
+  const compiled = (vars) => segments.map((f) => f(vars));
+  compileCache.set(path, compiled);
+  return compiled;
+}
+
+export function compileJsonPath(
+  path: JsonPath,
+  vars: Vars = {}
+): CompiledJsonPath {
+  let compiled = compileCache.get(path) || compileUncachedJsonPath(path);
+  return compiled(vars);
+}
+
+export function compileJsonPathAction(
+  action: JsonPathDataAction
+): DataAction<CompiledJsonPath> {
+  if (action.action === 'Transaction') {
+    return {
+      action: 'Transaction',
+      payload: action.payload.map((a) =>
+        mapAction(a, (p) => compileJsonPath(p, a.vars))
+      ),
+    };
+  }
+  return mapAction(action, (p) => compileJsonPath(p, action.vars));
 }
