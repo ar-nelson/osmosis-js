@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
 import { monotonicFactory } from 'ulid';
-import { DataAction } from '../src/actions';
+import { Action } from '../src/actions';
 import { Store, timestampIndex, ZERO_TIMESTAMP } from '../src/store';
 import { Json, timestampToString } from '../src/types';
 import MockSaveState from './mock-save-state';
@@ -335,7 +335,7 @@ describe('Store', function () {
   });
 
   function storeSync(
-    steps: [DataAction<string>[], DataAction<string>[]][],
+    steps: [Action<string>[], Action<string>[]][],
     store1 = new Store(new MockSaveState(UUID1)),
     store2 = new Store(new MockSaveState(UUID2)),
     allowFailures = false

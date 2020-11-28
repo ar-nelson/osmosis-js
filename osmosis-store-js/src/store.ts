@@ -2,7 +2,7 @@ import produce, { Draft } from 'immer';
 import flatMap from 'lodash.flatmap';
 import last from 'lodash.last';
 import sortedIndexBy from 'lodash.sortedindexby';
-import { DataAction, mapActionToList } from './actions';
+import { Action, mapActionToList } from './actions';
 import {
   anchorPathToId,
   applyIdMappedAction,
@@ -16,7 +16,7 @@ import {
   compileJsonPath,
   compileJsonPathAction,
   JsonPath,
-  JsonPathDataAction,
+  JsonPathAction,
   splitIntoSingularPaths,
 } from './jsonpath';
 import {
@@ -36,7 +36,7 @@ export interface CausalTree {
   readonly timestamp: Timestamp;
 }
 
-export type Op = CausalTree & DataAction<CompiledJsonPath | CompiledJsonIdPath>;
+export type Op = CausalTree & Action<CompiledJsonPath | CompiledJsonIdPath>;
 
 export interface SavePoint extends IdMappedJson {
   readonly timestamp: Timestamp;
@@ -111,7 +111,7 @@ export class Store {
       });
   }
 
-  dispatch(action: JsonPathDataAction): Failure[] {
+  dispatch(action: JsonPathAction): Failure[] {
     const processedActions = mapActionToList(
       compileJsonPathAction(action),
       (path) =>

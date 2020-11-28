@@ -4,7 +4,7 @@ import isPlainObject from 'lodash.isplainobject';
 import last from 'lodash.last';
 import {
   applyAction,
-  DataAction,
+  Action,
   mapAction,
   mapActionToList,
   ScalarAction,
@@ -166,11 +166,11 @@ export function applyIdMappedAction(
 }
 
 export function splitIntoActionsWithDirectPaths(
-  action: DataAction<CompiledJsonPath | CompiledJsonIdPath>,
+  action: Action<CompiledJsonPath | CompiledJsonIdPath>,
   json: IdMappedJson,
   id?: Timestamp
 ): {
-  actions: DataAction<{ id?: Timestamp; path: PathArray }>[];
+  actions: Action<{ id?: Timestamp; path: PathArray }>[];
   failures: Failure[];
 } {
   if (action.action === 'Transaction') {

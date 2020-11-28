@@ -3,7 +3,7 @@ import flatMap from 'lodash.flatmap';
 import isEqual from 'lodash.isequal';
 import isPlainObject from 'lodash.isplainobject';
 import nearley from 'nearley';
-import { DataAction, mapAction, ScalarAction } from './actions';
+import { Action, mapAction, ScalarAction } from './actions';
 import grammar from './jsonpath.grammar';
 import { Failure, Json, JsonObject, PathArray, Timestamp } from './types';
 
@@ -31,7 +31,7 @@ export interface JsonPathTransaction {
   payload: JsonPathScalarAction[];
 }
 
-export type JsonPathDataAction = JsonPathTransaction | JsonPathScalarAction;
+export type JsonPathAction = JsonPathTransaction | JsonPathScalarAction;
 
 export type JsonPathSegment =
   | WildcardSegment
@@ -273,7 +273,7 @@ export function evalJsonPathExpr(self: Json, expr: JsonPathExpr): Json {
   }
 }
 
-function adjustIndex(index: number, array: any[]): number {
+function adjustIndex(index: number, array: readonly any[]): number {
   let i = Math.floor(index);
   const len = array.length;
   if (len > 0) while (i < 0) i += len;
@@ -767,8 +767,8 @@ export function compileJsonPath(
 }
 
 export function compileJsonPathAction(
-  action: JsonPathDataAction
-): DataAction<CompiledJsonPath> {
+  action: JsonPathAction
+): Action<CompiledJsonPath> {
   if (action.action === 'Transaction') {
     return {
       action: 'Transaction',

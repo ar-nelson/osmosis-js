@@ -39,27 +39,7 @@ export interface Transaction<Path> {
   payload: ScalarAction<Path>[];
 }
 
-export interface RequestPairAction {
-  action: 'RequestPair';
-  payload: {
-    uuid: string;
-    message: string;
-  };
-}
-
-export interface AcceptPairAction {
-  action: 'AcceptPair';
-  payload: {
-    uuid: string;
-    pin: string;
-  };
-}
-
-export type NetworkAction = RequestPairAction | AcceptPairAction;
-
-export type DataAction<Path> = ScalarAction<Path> | Transaction<Path>;
-
-export type Action<Path> = NetworkAction | DataAction<Path>;
+export type Action<Path> = ScalarAction<Path> | Transaction<Path>;
 
 function followPath(
   path: PathArray,
@@ -224,9 +204,9 @@ export function mapAction<T, U>(
 ): ScalarAction<U>;
 
 export function mapAction<T, U>(
-  action: DataAction<T>,
+  action: Action<T>,
   f: (path: T) => U
-): DataAction<U> {
+): Action<U> {
   switch (action.action) {
     case 'Transaction':
       return {
@@ -242,9 +222,9 @@ export function mapAction<T, U>(
 }
 
 export function mapActionToList<T, U>(
-  action: DataAction<T>,
+  action: Action<T>,
   f: (path: T) => U[]
-): DataAction<U>[] {
+): Action<U>[] {
   switch (action.action) {
     case 'Transaction':
       return [
