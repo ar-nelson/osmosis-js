@@ -28,3 +28,10 @@ export interface Timestamp {
 export function timestampToString({ author, index }: Timestamp) {
   return `${index.toString(32).padStart(11, '0')}@${author}`;
 }
+
+export class OsmosisFailureError extends Error {
+  constructor(when: string, public readonly failures: readonly Failure[]) {
+    super(`Failure${failures.length > 1 ? 's' : ''} occurred when ${when}:
+${failures.map((f) => JSON.stringify(f, null, 2)).join('\n')}`);
+  }
+}

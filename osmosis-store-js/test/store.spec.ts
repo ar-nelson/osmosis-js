@@ -14,12 +14,11 @@ describe('Store', function () {
 
   it('should set and query a single value', function () {
     const store = new Store(new MockSaveState(UUID1));
-    const failures = store.dispatch({
+    store.dispatch({
       action: 'Set',
       path: '$.foo',
       payload: 'bar',
     });
-    expect(failures).to.be.empty;
     const results = store.queryOnce('$');
     expect(results).to.deep.equal([{ foo: 'bar' }]);
   });
@@ -27,13 +26,11 @@ describe('Store', function () {
   it('should add each compiled op to the ops list', function () {
     const saveState = new MockSaveState(UUID1);
     const store = new Store(saveState);
-    expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.foo',
-        payload: 1,
-      })
-    ).to.be.empty;
+    store.dispatch({
+      action: 'Set',
+      path: '$.foo',
+      payload: 1,
+    });
     const op1 = {
       action: 'Set',
       path: [{ type: 'Key', query: 'foo' }],
@@ -42,13 +39,11 @@ describe('Store', function () {
     };
     expect(store.ops).to.deep.equal([op1]);
     expect(saveState.load().ops).to.deep.equal([op1]);
-    expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.bar',
-        payload: 2,
-      })
-    ).to.be.empty;
+    store.dispatch({
+      action: 'Set',
+      path: '$.bar',
+      payload: 2,
+    });
     const op2 = {
       action: 'Set',
       path: [{ type: 'Key', query: 'bar' }],
@@ -62,13 +57,11 @@ describe('Store', function () {
   it('should create an initial save point', function () {
     const saveState = new MockSaveState(UUID1);
     const store = new Store(saveState);
-    expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.foo',
-        payload: 1,
-      })
-    ).to.be.empty;
+    store.dispatch({
+      action: 'Set',
+      path: '$.foo',
+      payload: 1,
+    });
     const savePoint = {
       root: {},
       idToPath: {},
@@ -85,14 +78,12 @@ describe('Store', function () {
     const store = new Store(saveState);
     ['foo', 'bar', 'baz', 'qux', 'quux', 'corge', 'grault', 'garply'].forEach(
       (key, payload) => {
-        expect(
-          store.dispatch({
-            action: 'Set',
-            path: '$.{key}',
-            vars: { key },
-            payload,
-          })
-        ).to.be.empty;
+        store.dispatch({
+          action: 'Set',
+          path: '$.{key}',
+          vars: { key },
+          payload,
+        });
       }
     );
     const ts = (index) => ({ author: UUID1, index });
@@ -174,13 +165,11 @@ describe('Store', function () {
   it('should reference existing locations by timestamp', function () {
     const saveState = new MockSaveState(UUID1);
     const store = new Store(saveState);
-    expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.foo',
-        payload: 1,
-      })
-    ).to.be.empty;
+    store.dispatch({
+      action: 'Set',
+      path: '$.foo',
+      payload: 1,
+    });
     const op1 = {
       action: 'Set',
       path: [{ type: 'Key', query: 'foo' }],
@@ -188,13 +177,11 @@ describe('Store', function () {
       timestamp: { author: UUID1, index: 1 },
     };
     expect(store.ops).to.deep.equal([op1]);
-    expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.foo',
-        payload: 2,
-      })
-    ).to.be.empty;
+    store.dispatch({
+      action: 'Set',
+      path: '$.foo',
+      payload: 2,
+    });
     const op2 = {
       action: 'Set',
       path: [
@@ -212,97 +199,78 @@ describe('Store', function () {
   it('should write existing locations by timestamp', function () {
     const saveState = new MockSaveState(UUID1);
     const store = new Store(saveState);
-    expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.foo',
-        payload: 1,
-      })
-    ).to.be.empty;
-    expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.foo',
-        payload: 2,
-      })
-    ).to.be.empty;
+    store.dispatch({
+      action: 'Set',
+      path: '$.foo',
+      payload: 1,
+    });
+    store.dispatch({
+      action: 'Set',
+      path: '$.foo',
+      payload: 2,
+    });
     expect(store.queryOnce('$')).to.deep.equal([{ foo: 2 }]);
   });
 
   it('should report failures when dispatching an action', function () {
     const store = new Store(new MockSaveState(UUID1));
     expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.foo.bar',
-        payload: 1,
-      })
+      store.dispatch(
+        {
+          action: 'Set',
+          path: '$.foo.bar',
+          payload: 1,
+        },
+        true
+      )
     ).to.have.length(1);
   });
 
   it('should support all action types', function () {
     const saveState = new MockSaveState(UUID1);
     const store = new Store(saveState);
-    expect(
-      store.dispatch({
-        action: 'InitArray',
-        path: '$.foo',
-      })
-    ).to.eql([]);
-    expect(
-      store.dispatch({
-        action: 'InsertUnique',
-        path: '$.foo',
-        payload: 'a',
-      })
-    ).to.eql([]);
-    expect(
-      store.dispatch({
-        action: 'InsertBefore',
-        path: '$.foo[0]',
-        payload: 'b',
-      })
-    ).to.eql([]);
-    expect(
-      store.dispatch({
-        action: 'InsertAfter',
-        path: '$.foo[0]',
-        payload: 'c',
-      })
-    ).to.eql([]);
-    expect(
-      store.dispatch({
-        action: 'Set',
-        path: '$.foo[3]',
-        payload: 'd',
-      })
-    ).to.eql([]);
-    expect(
-      store.dispatch({
-        action: 'InitObject',
-        path: '$.bar',
-      })
-    ).to.eql([]);
-    expect(
-      store.dispatch({
-        action: 'Copy',
-        path: '$.foo',
-        payload: '$.bar.baz',
-      })
-    ).to.eql([]);
-    expect(
-      store.dispatch({
-        action: 'Delete',
-        path: '$.foo[1]',
-      })
-    ).to.eql([]);
-    expect(
-      store.dispatch({
-        action: 'Move',
-        path: '$.foo',
-        payload: '$.bar.qux',
-      })
-    ).to.eql([]);
+    store.dispatch({
+      action: 'InitArray',
+      path: '$.foo',
+    });
+    store.dispatch({
+      action: 'InsertUnique',
+      path: '$.foo',
+      payload: 'a',
+    });
+    store.dispatch({
+      action: 'InsertBefore',
+      path: '$.foo[0]',
+      payload: 'b',
+    });
+    store.dispatch({
+      action: 'InsertAfter',
+      path: '$.foo[0]',
+      payload: 'c',
+    });
+    store.dispatch({
+      action: 'Set',
+      path: '$.foo[3]',
+      payload: 'd',
+    });
+    store.dispatch({
+      action: 'InitObject',
+      path: '$.bar',
+    });
+    store.dispatch({
+      action: 'Copy',
+      path: '$.foo',
+      payload: '$.bar.baz',
+    });
+    store.dispatch({
+      action: 'Delete',
+      path: '$.foo[1]',
+    });
+    store.dispatch({
+      action: 'Move',
+      path: '$.foo',
+      payload: '$.bar.qux',
+    });
     expect(store.queryOnce('$')).to.deep.equal([
       {
         bar: {
@@ -345,16 +313,10 @@ describe('Store', function () {
 
     steps.forEach(([actions1, actions2]) => {
       actions1.forEach((a) => {
-        const failures = store1.dispatch(a);
-        if (!allowFailures) {
-          expect(failures).to.eql([], `failure in action ${JSON.stringify(a)}`);
-        }
+        store1.dispatch(a, allowFailures);
       });
       actions2.forEach((a) => {
-        const failures = store2.dispatch(a);
-        if (!allowFailures) {
-          expect(failures).to.eql([], `failure in action ${JSON.stringify(a)}`);
-        }
+        store2.dispatch(a, allowFailures);
       });
       const { failures: failures1 } = store1.mergeOps(
         store2.ops.slice(lastOp2)

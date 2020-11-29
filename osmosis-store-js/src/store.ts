@@ -18,6 +18,7 @@ import {
   JsonPath,
   JsonPathAction,
   splitIntoSingularPaths,
+  Vars,
 } from './jsonpath';
 import {
   Cancelable,
@@ -27,6 +28,7 @@ import {
   Timestamp,
   timestampToString,
   Uuid,
+  OsmosisFailureError,
 } from './types';
 
 export const ZERO_UUID: Uuid = '00000000000000000000000000';
@@ -111,7 +113,14 @@ export class Store {
       });
   }
 
-  dispatch(action: JsonPathAction): Failure[] {
+  dispatch(action: JsonPathAction, returnFailures: true): Failure[];
+
+  dispatch(action: JsonPathAction, returnFailures?: boolean): void;
+
+  dispatch(
+    action: JsonPathAction,
+    returnFailures: boolean = false
+  ): Failure[] | undefined {
     const processedActions = mapActionToList(
       compileJsonPathAction(action),
       (path) =>
@@ -125,7 +134,7 @@ export class Store {
         action.action === 'Transaction' ? action.payload.length : 1;
       return { ...action, timestamp };
     });
-    return flatMap(ops, (op) => {
+    const failures = flatMap(ops, (op) => {
       const { state, changed, failures } = this.applyOp(
         op,
         SaveChanges.WhenChanged
@@ -133,6 +142,14 @@ export class Store {
       if (changed.length) this.state = state;
       return failures;
     });
+    if (returnFailures) {
+      return failures;
+    } else if (failures.length) {
+      throw new OsmosisFailureError(
+        `dispatching action ${JSON.stringify(action)}`,
+        failures
+      );
+    }
   }
 
   mergeOps(ops: Op[]): { changed: PathArray[]; failures: Failure[] } {
@@ -276,8 +293,21 @@ export class Store {
     return true;
   }
 
-  query(query: JsonPath, callback: (json: Json) => void): Cancelable {
-    const path = compileJsonPath(query);
+  subscribe(
+    query: JsonPath,
+    vars: Vars,
+    callback: (json: Json) => void
+  ): Cancelable;
+
+  subscribe(query: JsonPath, callback: (json: Json) => void): Cancelable;
+
+  subscribe(
+    query: JsonPath,
+    arg1: any,
+    arg2?: (json: Json) => void
+  ): Cancelable {
+    const path = compileJsonPath(query, arg2 ? arg1 : {});
+    const callback = arg2 || arg1;
     const entry = { path, callback };
     this.queryListeners.push(entry);
     setImmediate(() => callback(queryValues(this.state, path)));
@@ -288,8 +318,8 @@ export class Store {
     };
   }
 
-  queryOnce(query: JsonPath): Json[] {
-    return queryValues(this.state, compileJsonPath(query));
+  queryOnce(query: JsonPath, vars: Vars = {}): Json[] {
+    return queryValues(this.state, compileJsonPath(query, vars));
   }
 
   get ops(): readonly Op[] {
