@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "module": "commonjs",
+    "outDir": "./dist",
+    "noEmit": true,
+    "esModuleInterop": true,
+    "strictNullChecks": true
+  },
+  "include": ["./src/**/*", "./test/**/*.spec.ts"]
+}

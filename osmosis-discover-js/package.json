@@ -1,0 +1,22 @@
+{
+  "name": "@nels.onl/osmosis-discover-js",
+  "version": "0.1",
+  "description": "UDP service discovery and pairing for Osmosis",
+  "main": "index.js",
+  "author": "Adam Nelson <adam@nels.onl>",
+  "license": "BlueOak-1.0.0",
+  "gypfile": true,
+  "scripts": {
+    "build.native": "node-gyp configure && node-gyp build",
+    "prebuild": "yarn build.native",
+    "build": "tsc && babel src --out-dir dist --extensions .ts",
+    "clean": "rm -rf dist build",
+    "test": "mocha"
+  },
+  "devDependencies": {
+    "node-gyp": "^7.1.2"
+  },
+  "dependencies": {
+    "node-addon-api": "^3.0.2"
+  }
+}
