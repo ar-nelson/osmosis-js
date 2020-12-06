@@ -1,0 +1,68 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+package Osmosis;
+
+message Heartbeat {
+  message Payload {
+    bytes appId = 1;
+    bytes peerId = 2;
+    string peerName = 3;
+    uint32 ipAddress = 4;
+    uint32 port = 5;
+    uint64 timestamp = 6;
+    bytes certFingerprint = 7;
+  }
+  Payload payload = 1;
+  bytes signature = 2;
+}
+
+message PeerInfo {
+  bytes peerId = 1;
+  string peerName = 2;
+  bytes heartbeatKey = 3;
+  bytes certFingerprint = 4;
+}
+
+message PairResponse {
+  enum Status {
+    ACCEPTED = 0;
+    REJECTED = 1;
+    ALREADY_PAIRED = 2;
+  }
+  Status status = 1;
+  uint32 pin = 2;
+  oneof payload {
+    PeerInfo peer = 3;
+  }
+}
+
+message PeerList {
+  repeated PeerInfo peers = 1;
+}
+
+message ConnectRequest {
+  uint32 ipAddress = 1;
+  uint32 port = 2;
+}
+
+message ConnectResponse {
+  oneof payload {
+    ConnectRequest request = 1;
+    string error = 2;
+  }
+}
+
+message UpdateBody {
+  bytes payload = 1;
+}
+
+service Gateway {
+  rpc Pair(PeerInfo) returns (PairResponse) {}
+  rpc Connect(ConnectRequest) returns (ConnectResponse) {}
+}
+
+service Connection {
+  rpc Update(UpdateBody) returns (google.protobuf.Empty) {}
+  rpc SharePeers(PeerList) returns (google.protobuf.Empty) {}
+  rpc Unpair(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+}
