@@ -15,6 +15,7 @@
     "test": "mocha"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.2.2",
     "broadcast-interfaces": "^1.0.0",
     "bunyan": "^1.8.14",
     "get-port": "^5.1.1",

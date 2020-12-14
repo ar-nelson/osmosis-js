@@ -1,391 +1,621 @@
-import broadcastInterfaces from 'broadcast-interfaces';
+import * as grpc from '@grpc/grpc-js';
 import Logger from 'bunyan';
-import * as dgram from 'dgram';
+import { EventEmitter } from 'events';
 import getPort from 'get-port';
-import { md, util as forgeUtil } from 'node-forge';
+import { random, util as forgeUtil } from 'node-forge';
 import { promisify } from 'util';
 import * as uuid from 'uuid';
+import * as protoGrpc from './osmosis_grpc_pb';
 import * as proto from './osmosis_pb';
-import { MAX_PEER_NAME_LENGTH, PeerConfig, UUID_LENGTH } from './peer-config';
-import { binaryEqual, ipAddressToUint } from './utils';
+import {
+  configPeerList,
+  PeerConfig,
+  rootCertPem,
+  UUID_LENGTH,
+} from './peer-config';
+import PeerFinder, { HEARTBEAT_DELAY } from './peer-finder';
+import { binaryEqual, ipAddressFromUint, ipAddressToUint } from './utils';
 
-// Magic number to identify broadcast messages: 05-M-05-15
-const MAGIC = Uint8Array.of(0x05, 0x4d, 0x05, 0x15);
-
-const HEARTBEAT_PORT = 5150;
-const HEARTBEAT_DELAY = 60 * 1000; // 1 minute
-const INITIAL_HEARTBEAT_DELAYS = [1, 2, 6, 10, 30].map((x) => x * 1000);
-
-interface HeartbeatInterface {
-  readonly name: string;
-  readonly address: string;
-  readonly broadcastAddress: string;
-  readonly initialDelays: number[];
-  readonly sendSocket: dgram.Socket;
-  readonly recvSocket: dgram.Socket;
-}
-
-interface FaultyInterface {
-  readonly address: string;
-  failures: number;
-  expiresAt: Date;
-}
+const PAIR_TIMEOUT_MS = 30 * 1000;
 
 interface VisiblePeer {
   readonly peerId: string;
-  peerName: string;
-  ipAddress: string;
-  port: number;
+  readonly peerName: string;
+  readonly ipAddress: string;
+  readonly interfaceAddress: string;
+  readonly port: number;
   readonly certFingerprint: Uint8Array;
   expiresAt: Date;
 }
 
-function heartbeatPacket(
-  config: PeerConfig,
-  ifa: HeartbeatInterface,
-  gatewayPort: number
-): Uint8Array {
-  const payload = new proto.Heartbeat.Payload();
-  payload.setAppid(uuid.parse(config.appId) as Uint8Array);
-  payload.setPeerid(uuid.parse(config.peerId) as Uint8Array);
-  payload.setPeername(config.peerName);
-  payload.setIpaddress(ipAddressToUint(ifa.address));
-  payload.setPort(gatewayPort);
-  payload.setCertfingerprint(
-    forgeUtil.binary.hex.decode(config.certFingerprint)
-  );
-
-  const heartbeat = new proto.Heartbeat();
-  heartbeat.setPayload(payload);
-  heartbeat.setSignature(heartbeatSignature(payload, config.heartbeatKey));
-
-  const unprefixed = heartbeat.serializeBinary();
-  const prefixed = new Uint8Array(unprefixed.byteLength + MAGIC.byteLength);
-  prefixed.set(MAGIC, 0);
-  prefixed.set(unprefixed, MAGIC.byteLength);
-  return prefixed;
+interface ConnectedPeer {
+  readonly peerId: string;
+  readonly ipAddress: string;
+  readonly serverPort: number;
+  readonly server: grpc.Server;
+  clientPort?: number;
+  client?: protoGrpc.ConnectionClient;
 }
 
-function heartbeatSignature(
-  payload: proto.Heartbeat.Payload,
-  heartbeatKey: string
-): Uint8Array {
-  const hash = md.sha256.create();
-  hash.update(forgeUtil.binary.raw.encode(payload.serializeBinary()), 'raw');
-  hash.update(
-    forgeUtil.binary.raw.encode(uuid.parse(heartbeatKey) as Uint8Array),
-    'raw'
-  );
-  return forgeUtil.binary.hex.decode(hash.digest().toHex());
+export interface Peer {
+  readonly id: string;
+  readonly name: string;
+  readonly ipAddress: string;
+  readonly paired: boolean;
+  readonly connected: boolean;
 }
 
-function jitter(time: number): number {
-  return Math.ceil(time - time * 0.25 + Math.random() * time * 0.5);
+export interface ConnectionEvents {
+  peerAppeared: (peer: Peer) => void;
+  peerDisappeared: (peer: Peer) => void;
+  peerConnected: (peer: Peer) => void;
+  peerDisconnected: (peer: Peer) => void;
+  pairRequest: (peer: { id: string; name: string }) => void;
+  pairResponse: ({ peer: Peer, accepted: boolean }) => void;
+  pairPin: (pin: number) => void;
+  start: () => void;
+  stop: () => void;
 }
 
-export default class Connection {
+declare interface Connection {
+  on<U extends keyof ConnectionEvents>(
+    event: U,
+    listener: ConnectionEvents[U]
+  ): this;
+
+  emit<U extends keyof ConnectionEvents>(
+    event: U,
+    ...args: Parameters<ConnectionEvents[U]>
+  ): boolean;
+}
+
+class Connection extends EventEmitter {
+  private peerFinder?: PeerFinder;
   private gatewayPort?: number;
-  private intervalTimer?: ReturnType<typeof setInterval>;
-  private interfaces: HeartbeatInterface[] = [];
-  private faultyInterfaces: FaultyInterface[] = [];
-  private visiblePeers: VisiblePeer[] = [];
+  private gatewayServer?: grpc.Server;
+  private visiblePeers = new Map<string, VisiblePeer>();
+  private connectedPeers = new Map<string, ConnectedPeer>();
+  private serverCredentials: Promise<grpc.ServerCredentials>;
+  private clientCredentials: Promise<grpc.ChannelCredentials>;
+  private pairRequests = new Map<string, (pin: number | false) => void>();
+  private services: {
+    readonly service: grpc.ServiceDefinition<grpc.UntypedServiceImplementation>;
+    readonly implementation: grpc.UntypedServiceImplementation;
+  }[] = [];
 
   constructor(
     public readonly config: PeerConfig,
     private readonly log: Logger = Logger.createLogger({ name: 'osmosis' })
   ) {
+    super();
+    this.serverCredentials = (async () =>
+      grpc.ServerCredentials.createSsl(
+        await rootCertPem,
+        [
+          {
+            private_key: Buffer.from(config.privateKey, 'ascii'),
+            cert_chain: Buffer.from(config.certificate, 'ascii'),
+          },
+        ],
+        true
+      ))();
+    this.clientCredentials = (async () =>
+      grpc.credentials.createSsl(
+        await rootCertPem,
+        Buffer.from(config.privateKey, 'ascii'),
+        Buffer.from(config.certificate, 'ascii')
+      ))();
     this.start();
   }
 
   async start(): Promise<void> {
+    if (this.peerFinder || this.gatewayPort || this.gatewayServer) {
+      this.log.warn('Tried to start connection when already started');
+      return;
+    }
     this.log.info('Starting connection');
     this.gatewayPort = await getPort();
+    this.gatewayServer = new grpc.Server();
+    this.gatewayServer.addService(protoGrpc.GatewayService, {
+      Pair: this.onPair.bind(this),
+      Connect: this.onConnect.bind(this),
+    });
+    await promisify(this.gatewayServer.bindAsync.bind(this.gatewayServer))(
+      `0.0.0.0:${this.gatewayPort}`,
+      await this.serverCredentials
+    );
+    this.gatewayServer.start();
     this.log.info('Gateway service active on port %d', this.gatewayPort);
-    this.intervalTimer = setInterval(() => {
-      this.scanInterfaces();
-    }, HEARTBEAT_DELAY);
-    this.scanInterfaces();
+    this.peerFinder = new PeerFinder(
+      this.config,
+      this.gatewayPort,
+      (peerId) =>
+        this.config.pairedPeers.find((p) => p.peerId === peerId)?.secretToken,
+      this.log
+    );
+    this.peerFinder.on('heartbeat', this.receiveHeartbeat.bind(this));
+    this.emit('start');
   }
 
   stop(): void {
+    if (!this.peerFinder && !this.gatewayPort && !this.gatewayServer) {
+      this.log.warn('Tried to stop connection when already stopped');
+      return;
+    }
     this.log.info('Stopping connection');
-    if (this.intervalTimer) {
-      clearInterval(this.intervalTimer);
+    const gateway = this.gatewayServer;
+    if (gateway) {
+      gateway.tryShutdown((err) => {
+        this.log.error({ err }, 'Failed to stop gateway service');
+        gateway.forceShutdown();
+      });
+      this.gatewayServer = undefined;
     }
-    for (const ifa of this.interfaces) {
-      this.shutdownInterface(ifa);
-    }
-    this.interfaces = [];
+    this.gatewayPort = undefined;
+    this.peerFinder?.stop();
+    this.peerFinder = undefined;
+    this.emit('stop');
   }
 
-  private shutdownInterface(ifa: HeartbeatInterface) {
-    this.log.trace('Shutting down interface %s (%s)', ifa.name, ifa.address);
-    ifa.sendSocket.close();
-    ifa.recvSocket.close();
-  }
-
-  private scanInterfaces() {
-    const interfaces = broadcastInterfaces().filter(
-      (x) => x.running && !x.internal
-    );
-    this.interfaces = this.interfaces.filter((ifa) => {
-      if (interfaces.find((found) => ifa.address === found.address)) {
-        return true;
-      }
-      this.shutdownInterface(ifa);
-      return false;
-    });
-    for (const ifa of interfaces) {
-      if (
-        this.interfaces.find((existing) => ifa.address === existing.address)
-      ) {
-        continue;
-      }
-      const faulty = this.faultyInterfaces.find(
-        (faulty) => ifa.address === faulty.address
-      );
-      if (faulty) {
-        if (new Date() < faulty.expiresAt) {
-          this.log.trace(
-            'Skipping heartbeat for %s: interface flagged as faulty',
-            ifa.address
-          );
-          continue;
-        }
-        this.log.trace(
-          'Retrying heartbeat for %s (faulty flag expired)',
-          ifa.address
-        );
-        this.faultyInterfaces = this.faultyInterfaces.filter(
-          (x) => x !== faulty
-        );
-      }
-      this.log.info('New interface found: %s (%s)', ifa.name, ifa.address);
-      try {
-        const sendSocket = dgram.createSocket({
-          type: 'udp4',
-          reuseAddr: true,
-        });
-        const recvSocket = dgram.createSocket({
-          type: 'udp4',
-          reuseAddr: true,
-        });
-        recvSocket.on('listening', () => {
-          this.log.trace(
-            'Interface %s bound to UDP port %d',
-            ifa.address,
-            HEARTBEAT_PORT
-          );
-          recvSocket.setBroadcast(true);
-          this.sendHeartbeat(ifa.address);
-        });
-        recvSocket.on('message', (msg, { address }) => {
-          this.receiveHeartbeat(msg, address);
-        });
-        const onError = (err) => {
-          this.log.warn(
-            { err },
-            `Error occurred on interface %s (%s)`,
-            ifa.name,
-            ifa.address
-          );
-          this.reportFaultyInterface(ifa.address);
-        };
-        sendSocket.on('error', onError);
-        recvSocket.on('error', onError);
-        sendSocket.bind({ address: ifa.address }, () =>
-          sendSocket.setBroadcast(true)
-        );
-        recvSocket.bind({
-          address: ifa.broadcast,
-          port: HEARTBEAT_PORT,
-        });
-        this.interfaces.push({
-          name: ifa.name,
-          address: ifa.address,
-          broadcastAddress: ifa.broadcast,
-          initialDelays: [...INITIAL_HEARTBEAT_DELAYS],
-          sendSocket,
-          recvSocket,
-        });
-      } catch (err) {
-        this.log.warn(
-          { err },
-          `Failed to bind to interface %s (%s)`,
-          ifa.name,
-          ifa.address
-        );
-        this.reportFaultyInterface(ifa.address);
-      }
+  private receiveHeartbeat({
+    heartbeat,
+    interfaceAddress,
+  }: {
+    heartbeat: proto.Heartbeat.Payload;
+    interfaceAddress: string;
+  }) {
+    const peerId = uuid.stringify(heartbeat.getPeerid_asU8());
+    const ipAddress = ipAddressFromUint(heartbeat.getIpaddress());
+    let visible = this.visiblePeers.get(peerId);
+    const pushVisible = !visible;
+    const now = new Date();
+    if (!visible || visible.expiresAt < now) {
+      visible = {
+        peerId,
+        peerName: heartbeat.getPeername(),
+        ipAddress,
+        interfaceAddress,
+        port: heartbeat.getPort(),
+        certFingerprint: heartbeat.getCertfingerprint_asU8(),
+        expiresAt: now,
+      };
     }
-  }
-
-  private reportFaultyInterface(address: string) {
-    this.interfaces = this.interfaces.filter((ifa) => {
-      if (ifa.address !== address) {
-        return true;
-      }
-      this.shutdownInterface(ifa);
-      return false;
-    });
-
-    const faulty = this.faultyInterfaces.find((f) => address === f.address) || {
-      address,
-      failures: 0,
-      expiresAt: new Date(),
-    };
-    if (faulty.failures < 1) {
-      this.faultyInterfaces.push(faulty);
-    }
-    faulty.failures += 1;
-    faulty.expiresAt = new Date(
-      new Date().getTime() + HEARTBEAT_DELAY * Math.pow(2, faulty.failures)
-    );
-  }
-
-  private async sendHeartbeat(address: string) {
-    const ifa = this.interfaces.find((ifa) => ifa.address === address);
-    if (!ifa || !this.gatewayPort) {
-      this.log.trace(
-        'Cannot send heartbeat: no active interface for %s',
-        address
+    if (
+      ipAddress !== visible.ipAddress ||
+      heartbeat.getPort() !== visible.port
+    ) {
+      this.log.warn(
+        'Multiple heartbeats for peerId %s (existing %s:%d, ignored %s:%d)',
+        peerId,
+        visible.ipAddress,
+        visible.port,
+        ipAddress,
+        heartbeat.getPort()
       );
       return;
     }
-    try {
-      this.log.trace(
-        'Sending heartbeat on interface %s (%s)',
-        ifa.name,
-        address
+
+    const paired = this.config.pairedPeers.find((p) => p.peerId === peerId);
+    if (paired && !this.connectedPeers.has(peerId)) {
+      this.connectPeer(visible);
+    }
+
+    visible.expiresAt = new Date(now.getTime() + HEARTBEAT_DELAY * 3);
+    if (pushVisible) {
+      this.log.info(
+        'New peer found: %s (%s) at %s:%d',
+        visible.peerName,
+        peerId,
+        visible.ipAddress,
+        visible.port
       );
-      const message = heartbeatPacket(this.config, ifa, this.gatewayPort);
-      await promisify(ifa.sendSocket.send.bind(ifa.sendSocket))(
-        message,
-        0,
-        message.byteLength,
-        HEARTBEAT_PORT,
-        ifa.broadcastAddress
-      );
-      setTimeout(
-        () => this.sendHeartbeat(address),
-        jitter(
-          (ifa.initialDelays.length && ifa.initialDelays.shift()) ||
-            HEARTBEAT_DELAY
-        )
-      );
-    } catch (err) {
-      this.log.warn(
-        { err },
-        'Failed to send heartbeat on interface %s (%s)',
-        ifa.name,
-        address
-      );
+      this.visiblePeers.set(peerId, visible);
     }
   }
 
-  private receiveHeartbeat(packet: Uint8Array, ipAddress: string) {
-    try {
-      if (!binaryEqual(MAGIC, packet.subarray(0, MAGIC.byteLength))) {
-        this.log.trace(
-          'Ignoring broadcast packet from %s: not a heartbeat',
-          ipAddress
-        );
-        return;
-      }
-      const heartbeat = proto.Heartbeat.deserializeBinary(
-        packet.subarray(MAGIC.byteLength)
+  private async onPair(peerInfo: proto.PeerInfo): Promise<proto.PairResponse> {
+    const response = new proto.PairResponse();
+    if (
+      peerInfo.getPeerid_asU8().byteLength !== UUID_LENGTH ||
+      peerInfo.getSecrettoken_asU8().byteLength !== UUID_LENGTH
+    ) {
+      this.log.error('Received malformed pair request');
+      response.setStatus(proto.PairResponse.Status.REJECTED);
+      return response;
+    }
+    const peerId = uuid.stringify(peerInfo.getPeerid_asU8());
+    if (this.pairRequests.has(peerId)) {
+      this.log.warn({ peerId }, 'Received overlapping pair request');
+      response.setStatus(proto.PairResponse.Status.REJECTED);
+      return response;
+    }
+    if (this.config.pairedPeers.find((p) => p.peerId === peerId)) {
+      this.log.warn(
+        { peerId },
+        'Received pair request for already-paired peer'
       );
-      const payload = heartbeat.getPayload();
-      if (
-        !payload ||
-        this.config.appId !== uuid.stringify(payload.getAppid_asU8())
-      ) {
-        this.log.trace(
-          'Ignoring heartbeat from %s: different appId',
-          ipAddress
-        );
-        return;
-      }
-      if (
-        ipAddressToUint(ipAddress) !== payload.getIpaddress() ||
-        payload.getPeerid_asU8().byteLength !== UUID_LENGTH ||
-        payload.getPeername().length > MAX_PEER_NAME_LENGTH ||
-        payload.getPort() < 1024 ||
-        payload.getPort() > 65535
-      ) {
-        this.log.warn(
-          'Ignoring heartbeat from %s: malformed heartbeat packet',
-          ipAddress
-        );
-        return;
-      }
-      const peerId = uuid.stringify(payload.getPeerid_asU8());
-      if (peerId === this.config.peerId) {
-        return;
-      }
+      response.setStatus(proto.PairResponse.Status.ALREADY_PAIRED);
+      return response;
+    }
 
-      let visible = this.visiblePeers.find((p) => p.peerId === peerId);
-      const pushVisible = !visible;
-      if (!visible || new Date() >= visible.expiresAt) {
-        visible = {
-          peerId,
-          peerName: payload.getPeername(),
-          ipAddress,
-          port: payload.getPort(),
-          certFingerprint: payload.getCertfingerprint_asU8(),
-          expiresAt: new Date(),
-        };
-      }
-      if (
-        ipAddress !== visible.ipAddress ||
-        payload.getPort() !== visible.port
-      ) {
-        this.log.warn(
-          'Multiple heartbeats for peerId %s (existing %s:%d, ignored %s:%d)',
-          peerId,
-          visible.ipAddress,
-          visible.port,
-          ipAddress,
-          payload.getPort()
-        );
-        return;
-      }
+    const pin = await new Promise<number | false>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.log.warn({ peerId }, 'Pair request timed out');
+        resolve(false);
+      }, PAIR_TIMEOUT_MS);
+      this.pairRequests.set(peerId, (x) => {
+        clearTimeout(timeout);
+        resolve(x);
+      });
 
+      this.emit('pairRequest', { id: peerId, name: peerInfo.getPeername() });
+    });
+
+    this.pairRequests.delete(peerId);
+
+    if (pin === false) {
+      this.log.info({ peerId }, 'Sending rejection for pair request');
+      response.setStatus(proto.PairResponse.Status.REJECTED);
+    } else {
+      this.log.info({ peerId, pin }, 'Sending acceptance for pair request');
+      response.setStatus(proto.PairResponse.Status.ACCEPTED);
+      response.setPin(pin);
+      const ourInfo = new proto.PeerInfo();
+      ourInfo.setPeerid(uuid.parse(this.config.peerId) as Uint8Array);
+      ourInfo.setPeername(this.config.peerName);
+      ourInfo.setSecrettoken(uuid.parse(this.config.secretToken) as Uint8Array);
+      ourInfo.setCertfingerprint(
+        forgeUtil.binary.hex.decode(this.config.certFingerprint)
+      );
+      response.setPeer(ourInfo);
+    }
+
+    return response;
+  }
+
+  // TODO: Add more security to this
+  private onConfirmPair(req: proto.PairConfirm): proto.PairConfirm {
+    this.log.trace('Got pair confirm');
+    const rsp = new proto.PairConfirm();
+    rsp.setPeerid(uuid.parse(this.config.peerId) as Uint8Array);
+    rsp.setAccepted(
+      req.getAccepted() &&
+        req.getPeerid_asU8().byteLength === UUID_LENGTH &&
+        this.config.pairedPeers
+          .map((p) => p.peerId)
+          .includes(uuid.stringify(req.getPeerid_asU8()))
+    );
+    return rsp;
+  }
+
+  private async onConnect(
+    req: proto.ConnectRequest
+  ): Promise<proto.ConnectResponse> {
+    const response = new proto.ConnectResponse();
+    try {
+      const peerId = uuid.stringify(req.getPeerid_asU8());
+      const secretToken = uuid.stringify(req.getSecrettoken_asU8());
+      const ipAddress = ipAddressFromUint(req.getIpaddress());
       const paired = this.config.pairedPeers.find((p) => p.peerId === peerId);
-      if (paired) {
-        const expectedSignature = heartbeatSignature(
-          payload,
-          paired.heartbeatKey
+      if (!paired) {
+        this.log.warn(
+          `Rejected connection attempt fron unpaired peer %s`,
+          peerId
         );
-        if (!binaryEqual(heartbeat.getSignature_asU8(), expectedSignature)) {
-          this.log.warn(
-            'Apparent peer %s at %s:%d does not have valid heartbeat signature',
-            peerId,
-            ipAddress,
-            payload.getPort()
-          );
-          return;
-        }
-        // TODO: Connect to paired peer when first seen
-      }
-
-      visible.expiresAt = new Date(new Date().getTime() + HEARTBEAT_DELAY * 3);
-      if (pushVisible) {
-        this.log.trace(
-          'New peer found: %s (%s) at %s:%d',
-          visible.peerName,
+        response.setStatus(proto.ConnectResponse.Status.NOT_PAIRED);
+      } else if (paired.secretToken !== secretToken) {
+        this.log.warn(
+          `Rejected connection attempt from apparent peer %s due to wrong secret token`,
+          peerId
+        );
+        response.setStatus(proto.ConnectResponse.Status.BAD_TOKEN);
+      } else {
+        this.log.info('Connection request from peer %s', peerId);
+        const { server, serverPort } = await this.createConnectionServer(
+          peerId
+        );
+        const connectedPeer: ConnectedPeer = {
           peerId,
-          visible.ipAddress,
-          visible.port
-        );
-        this.visiblePeers.push(visible);
+          ipAddress,
+          serverPort,
+          server,
+        };
+        this.connectedPeers.set(peerId, connectedPeer);
+        try {
+          const client = new protoGrpc.ConnectionClient(
+            `${ipAddress}:${req.getPort()}`,
+            await this.clientCredentials
+          );
+          connectedPeer.client = client;
+          await promisify(client.sharePeers.bind(client))(
+            configPeerList(this.config)
+          );
+          this.log.trace(
+            'Successfully connected to %s, sending response',
+            peerId
+          );
+          response.setPort(serverPort);
+          response.setSecrettoken(
+            uuid.parse(this.config.secretToken) as Uint8Array
+          );
+        } catch (err) {
+          this.log.error(
+            { err },
+            "Connection to %s failed: our client could not connect to peer's server",
+            peerId
+          );
+          this.disconnectPeer(peerId);
+          response.setStatus(proto.ConnectResponse.Status.CONNECT_FAILED);
+        }
       }
     } catch (err) {
-      this.log.warn(
-        { err },
-        'Exception when receiving heartbeat packet from %s',
-        ipAddress
-      );
+      this.log.error({ err }, 'Error processing Connect request');
+      response.setStatus(proto.ConnectResponse.Status.INTERNAL_ERROR);
     }
+    return response;
+  }
+
+  private getInfo(): proto.PeerInfo {
+    const info = new proto.PeerInfo();
+    info.setPeerid(uuid.parse(this.config.peerId) as Uint8Array);
+    info.setPeername(this.config.peerName);
+    info.setSecrettoken(uuid.parse(this.config.secretToken) as Uint8Array);
+    info.setCertfingerprint(
+      forgeUtil.binary.hex.decode(this.config.certFingerprint)
+    );
+    return info;
+  }
+
+  async pair(peerId: string): Promise<boolean> {
+    if (this.config.pairedPeers.find((p) => p.peerId === peerId)) {
+      this.log.error(`Pairing failed: already paired with ${peerId}`);
+      return false;
+    }
+    const peer = this.visiblePeers.get(peerId);
+    if (!peer) {
+      this.log.error(`Pairing failed: no visible peer with ID ${peerId}`);
+      return false;
+    }
+    const pinBytes = await promisify(random.getBytes)(4);
+    const pin =
+      (pinBytes[0] * (1 << 24) +
+        pinBytes[1] * (1 << 16) +
+        pinBytes[2] * (1 << 8) +
+        pinBytes[3]) %
+      10000;
+    this.log.info(
+      { pin },
+      'Sending pair request to %s at %s:%d',
+      peerId,
+      peer.ipAddress,
+      peer.port
+    );
+    this.emit('pairPin', pin);
+    const client = new protoGrpc.GatewayClient(
+      `${peer.ipAddress}:${peer.port}`,
+      await this.clientCredentials
+    );
+    let accepted = false;
+    try {
+      const response: proto.PairResponse = await promisify(
+        client.pair.bind(client)
+      )(this.getInfo());
+      switch (response.getStatus()) {
+        case proto.PairResponse.Status.ACCEPTED: {
+          if (response.getPin() !== pin) {
+            this.log.warn(
+              { expected: pin, received: response.getPin() },
+              'Incorrect pairing PIN from %s; pair request rejected',
+              peerId
+            );
+            break;
+          }
+          this.log.info('Pair request to %s was accepted', peerId);
+          const peerData = response.getPeer();
+          if (
+            !peerData ||
+            peerData.getPeerid_asU8().byteLength !== UUID_LENGTH ||
+            peerData.getSecrettoken_asU8().byteLength !== UUID_LENGTH ||
+            uuid.stringify(peerData.getPeerid_asU8()) !== peerId ||
+            !binaryEqual(
+              peerData.getCertfingerprint_asU8(),
+              peer.certFingerprint
+            )
+          ) {
+            this.log.error('Malformed pair response from %s', peerId);
+            break;
+          }
+          this.config.pairedPeers.push({
+            peerId,
+            peerName: peerData.getPeername(),
+            secretToken: uuid.stringify(peerData.getSecrettoken_asU8()),
+            certFingerprint: forgeUtil.binary.hex.encode(peer.certFingerprint),
+          });
+          accepted = true;
+          break;
+        }
+        case proto.PairResponse.Status.REJECTED:
+          this.log.info('Pair request to %s was rejected', peerId);
+          break;
+        case proto.PairResponse.Status.ALREADY_PAIRED:
+          this.log.warn(
+            'Pair request to %s is redundant; this peer is already paired',
+            peerId
+          );
+          break;
+      }
+    } finally {
+      client.close();
+    }
+    this.emit('pairResponse', { peer: this.exportPeer(peer), accepted });
+    if (accepted) {
+      this.connectPeer(peer);
+    }
+    return accepted;
+  }
+
+  acceptPairRequest(peerId: string, pin: number): boolean {
+    const resolver = this.pairRequests.get(peerId);
+    resolver?.(pin);
+    return !!resolver;
+  }
+
+  rejectPairRequest(peerId: string): boolean {
+    const resolver = this.pairRequests.get(peerId);
+    resolver?.(false);
+    return !!resolver;
+  }
+
+  private async createConnectionServer(peerId: string) {
+    const serverPort = await getPort();
+    this.log.trace(
+      'Creating connection server for peer %s on port %s',
+      peerId,
+      serverPort
+    );
+    const server = new grpc.Server();
+    server.addService(protoGrpc.ConnectionService, {
+      Pair(req, cb) {
+        this.onPair(req).then((rsp) => cb(null, rsp), cb);
+      },
+      Connect(req, cb) {
+        this.onConnect(req).then((rsp) => cb(null, rsp), cb);
+      },
+      ConfirmPair: this.onConfirmPair.bind(this),
+    });
+    this.services.forEach(({ service, implementation }) => {
+      server.addService(service, implementation);
+    });
+    await promisify(server.bindAsync.bind(this.gatewayServer))(
+      `0.0.0.0:${serverPort}`,
+      await this.serverCredentials
+    );
+    server.start();
+    return { server, serverPort };
+  }
+
+  private async connectPeer(peer: VisiblePeer): Promise<void> {
+    const { server, serverPort } = await this.createConnectionServer(
+      peer.peerId
+    );
+    this.log.info(
+      'Connecting to %s at %s:%d',
+      peer.peerId,
+      peer.ipAddress,
+      peer.port
+    );
+
+    const connectedPeer: ConnectedPeer = {
+      peerId: peer.peerId,
+      ipAddress: peer.ipAddress,
+      serverPort,
+      server,
+    };
+    this.connectedPeers.set(peer.peerId, connectedPeer);
+
+    const req = new proto.ConnectRequest();
+    req.setIpaddress(ipAddressToUint(peer.interfaceAddress));
+    req.setPort(serverPort);
+    req.setPeerid(uuid.parse(this.config.peerId) as Uint8Array);
+    req.setSecrettoken(uuid.parse(this.config.secretToken) as Uint8Array);
+    const gatewayClient = new protoGrpc.GatewayClient(
+      `${peer.ipAddress}:${peer.port}`,
+      await this.clientCredentials
+    );
+    try {
+      const response: proto.ConnectResponse = await promisify(
+        gatewayClient.connect.bind(gatewayClient)
+      )(req);
+      switch (response.getStatus()) {
+        case proto.ConnectResponse.Status.OK:
+          this.log.trace('OK connection response from %s', peer.peerId);
+          connectedPeer.clientPort = response.getPort();
+          try {
+            const client = new protoGrpc.ConnectionClient(
+              `${peer.ipAddress}:${response.getPort()}`,
+              await this.clientCredentials
+            );
+            connectedPeer.client = client;
+            await promisify(client.sharePeers.bind(client))(
+              configPeerList(this.config)
+            );
+            this.log.trace('Successfully connected to %s', peer.peerId);
+          } catch (err) {
+            this.log.error(
+              { err },
+              "Connection to %s failed: our client could not connect to peer's server",
+              peer.peerId
+            );
+            this.disconnectPeer(peer.peerId);
+          }
+          break;
+        case proto.ConnectResponse.Status.BAD_TOKEN:
+          this.log.error('Connection to %s failed: bad token', peer.peerId);
+          break;
+        case proto.ConnectResponse.Status.NOT_PAIRED:
+          this.log.error('Connection to %s failed: not paired', peer.peerId);
+          break;
+        case proto.ConnectResponse.Status.CONNECT_FAILED:
+          this.log.error(
+            "Connection to %s failed: peer's client could not connect to our server",
+            peer.peerId
+          );
+          break;
+        case proto.ConnectResponse.Status.INTERNAL_ERROR:
+          this.log.error(
+            'Connection to %s failed: internal error',
+            peer.peerId
+          );
+          break;
+      }
+    } finally {
+      gatewayClient.close();
+    }
+  }
+
+  async disconnectPeer(peerId: string): Promise<boolean> {
+    const connected = this.connectedPeers.get(peerId);
+    if (!connected) {
+      this.log.trace('Cannot disconnect peer %s: not connected', peerId);
+      return false;
+    }
+    this.log.trace('Disconnecting peer %s', peerId);
+    connected.server.tryShutdown((err) => {
+      this.log.error(
+        { err },
+        'Failed to stop connection service for %s',
+        peerId
+      );
+      connected.server.forceShutdown();
+    });
+    connected.client?.close();
+    this.connectedPeers.delete(peerId);
+    return true;
+  }
+
+  addService<Impl extends grpc.UntypedServiceImplementation>(
+    service: grpc.ServiceDefinition<Impl>,
+    implementation: Impl
+  ): void {
+    this.connectedPeers.forEach(({ server }) => {
+      server?.addService(service, implementation);
+    });
+    this.services.push({ service, implementation });
+  }
+
+  private exportPeer(peer: VisiblePeer): Peer {
+    return {
+      id: peer.peerId,
+      name: peer.peerName,
+      ipAddress: peer.ipAddress,
+      paired: !!this.config.pairedPeers.find((p) => p.peerId === peer.peerId),
+      connected: this.connectedPeers.has(peer.peerId),
+    };
+  }
+
+  get peers(): Peer[] {
+    return [...this.visiblePeers.values()].map(this.exportPeer.bind(this));
   }
 }
+
+export default Connection;

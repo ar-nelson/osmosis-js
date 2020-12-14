@@ -19,7 +19,7 @@ message Heartbeat {
 message PeerInfo {
   bytes peerId = 1;
   string peerName = 2;
-  bytes heartbeatKey = 3;
+  bytes secretToken = 3;
   bytes certFingerprint = 4;
 }
 
@@ -36,33 +36,42 @@ message PairResponse {
   }
 }
 
+message PairConfirm {
+  bytes peerId = 1;
+  bool accepted = 2;
+}
+
 message PeerList {
   repeated PeerInfo peers = 1;
 }
 
 message ConnectRequest {
-  uint32 ipAddress = 1;
-  uint32 port = 2;
+  bytes peerId = 1;
+  bytes secretToken = 2;
+  uint32 ipAddress = 3;
+  uint32 port = 4;
 }
 
 message ConnectResponse {
-  oneof payload {
-    ConnectRequest request = 1;
-    string error = 2;
+  enum Status {
+    OK = 0;
+    NOT_PAIRED = 1;
+    BAD_TOKEN = 2;
+    CONNECT_FAILED = 3;
+    INTERNAL_ERROR = 4;
   }
-}
-
-message UpdateBody {
-  bytes payload = 1;
+  Status status = 1;
+  bytes secretToken = 2;
+  uint32 port = 3;
 }
 
 service Gateway {
   rpc Pair(PeerInfo) returns (PairResponse) {}
+  rpc ConfirmPair(PairConfirm) returns (PairConfirm) {}
   rpc Connect(ConnectRequest) returns (ConnectResponse) {}
 }
 
 service Connection {
-  rpc Update(UpdateBody) returns (google.protobuf.Empty) {}
   rpc SharePeers(PeerList) returns (google.protobuf.Empty) {}
   rpc Unpair(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }

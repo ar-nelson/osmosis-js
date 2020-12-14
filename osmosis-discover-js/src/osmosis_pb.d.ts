@@ -106,10 +106,10 @@ declare class PeerInfo extends jspb.Message {
   getPeername(): string;
   setPeername(value: string): void;
 
-  getHeartbeatkey(): Uint8Array | string;
-  getHeartbeatkey_asU8(): Uint8Array;
-  getHeartbeatkey_asB64(): string;
-  setHeartbeatkey(value: Uint8Array | string): void;
+  getSecrettoken(): Uint8Array | string;
+  getSecrettoken_asU8(): Uint8Array;
+  getSecrettoken_asB64(): string;
+  setSecrettoken(value: Uint8Array | string): void;
 
   getCertfingerprint(): Uint8Array | string;
   getCertfingerprint_asU8(): Uint8Array;
@@ -138,7 +138,7 @@ declare namespace PeerInfo {
   export type AsObject = {
     peerid: Uint8Array | string;
     peername: string;
-    heartbeatkey: Uint8Array | string;
+    secrettoken: Uint8Array | string;
     certfingerprint: Uint8Array | string;
   };
 }
@@ -198,6 +198,43 @@ declare namespace PairResponse {
   }
 }
 
+declare class PairConfirm extends jspb.Message {
+  getPeerid(): Uint8Array | string;
+  getPeerid_asU8(): Uint8Array;
+  getPeerid_asB64(): string;
+  setPeerid(value: Uint8Array | string): void;
+
+  getAccepted(): boolean;
+  setAccepted(value: boolean): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): PairConfirm.AsObject;
+  static toObject(
+    includeInstance: boolean,
+    msg: PairConfirm
+  ): PairConfirm.AsObject;
+  static extensions: { [key: number]: jspb.ExtensionFieldInfo<jspb.Message> };
+  static extensionsBinary: {
+    [key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>;
+  };
+  static serializeBinaryToWriter(
+    message: PairConfirm,
+    writer: jspb.BinaryWriter
+  ): void;
+  static deserializeBinary(bytes: Uint8Array): PairConfirm;
+  static deserializeBinaryFromReader(
+    message: PairConfirm,
+    reader: jspb.BinaryReader
+  ): PairConfirm;
+}
+
+declare namespace PairConfirm {
+  export type AsObject = {
+    peerid: Uint8Array | string;
+    accepted: boolean;
+  };
+}
+
 declare class PeerList extends jspb.Message {
   clearPeersList(): void;
   getPeersList(): Array<PeerInfo>;
@@ -229,6 +266,16 @@ declare namespace PeerList {
 }
 
 declare class ConnectRequest extends jspb.Message {
+  getPeerid(): Uint8Array | string;
+  getPeerid_asU8(): Uint8Array;
+  getPeerid_asB64(): string;
+  setPeerid(value: Uint8Array | string): void;
+
+  getSecrettoken(): Uint8Array | string;
+  getSecrettoken_asU8(): Uint8Array;
+  getSecrettoken_asB64(): string;
+  setSecrettoken(value: Uint8Array | string): void;
+
   getIpaddress(): number;
   setIpaddress(value: number): void;
 
@@ -258,23 +305,27 @@ declare class ConnectRequest extends jspb.Message {
 
 declare namespace ConnectRequest {
   export type AsObject = {
+    peerid: Uint8Array | string;
+    secrettoken: Uint8Array | string;
     ipaddress: number;
     port: number;
   };
 }
 
 declare class ConnectResponse extends jspb.Message {
-  hasRequest(): boolean;
-  clearRequest(): void;
-  getRequest(): ConnectRequest | undefined;
-  setRequest(value?: ConnectRequest): void;
+  getStatus(): ConnectResponse.StatusMap[keyof ConnectResponse.StatusMap];
+  setStatus(
+    value: ConnectResponse.StatusMap[keyof ConnectResponse.StatusMap]
+  ): void;
 
-  hasError(): boolean;
-  clearError(): void;
-  getError(): string;
-  setError(value: string): void;
+  getSecrettoken(): Uint8Array | string;
+  getSecrettoken_asU8(): Uint8Array;
+  getSecrettoken_asB64(): string;
+  setSecrettoken(value: Uint8Array | string): void;
 
-  getPayloadCase(): ConnectResponse.PayloadCase;
+  getPort(): number;
+  setPort(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): ConnectResponse.AsObject;
   static toObject(
@@ -298,46 +349,18 @@ declare class ConnectResponse extends jspb.Message {
 
 declare namespace ConnectResponse {
   export type AsObject = {
-    request?: ConnectRequest.AsObject;
-    error: string;
+    status: ConnectResponse.StatusMap[keyof ConnectResponse.StatusMap];
+    secrettoken: Uint8Array | string;
+    port: number;
   };
 
-  export enum PayloadCase {
-    PAYLOAD_NOT_SET = 0,
-    REQUEST = 1,
-    ERROR = 2,
+  export interface StatusMap {
+    OK: 0;
+    NOT_PAIRED: 1;
+    BAD_TOKEN: 2;
+    CONNECT_FAILED: 3;
+    INTERNAL_ERROR: 4;
   }
-}
 
-declare class UpdateBody extends jspb.Message {
-  getPayload(): Uint8Array | string;
-  getPayload_asU8(): Uint8Array;
-  getPayload_asB64(): string;
-  setPayload(value: Uint8Array | string): void;
-
-  serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): UpdateBody.AsObject;
-  static toObject(
-    includeInstance: boolean,
-    msg: UpdateBody
-  ): UpdateBody.AsObject;
-  static extensions: { [key: number]: jspb.ExtensionFieldInfo<jspb.Message> };
-  static extensionsBinary: {
-    [key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>;
-  };
-  static serializeBinaryToWriter(
-    message: UpdateBody,
-    writer: jspb.BinaryWriter
-  ): void;
-  static deserializeBinary(bytes: Uint8Array): UpdateBody;
-  static deserializeBinaryFromReader(
-    message: UpdateBody,
-    reader: jspb.BinaryReader
-  ): UpdateBody;
-}
-
-declare namespace UpdateBody {
-  export type AsObject = {
-    payload: Uint8Array | string;
-  };
+  export const Status: StatusMap;
 }

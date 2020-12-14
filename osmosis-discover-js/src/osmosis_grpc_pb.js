@@ -1,7 +1,7 @@
 // GENERATED CODE -- DO NOT EDIT!
 
 'use strict';
-var grpc = require('grpc');
+var grpc = require('@grpc/grpc-js');
 var src_osmosis_pb = require('../src/osmosis_pb.js');
 var google_protobuf_empty_pb = require('google-protobuf/google/protobuf/empty_pb.js');
 
@@ -27,6 +27,19 @@ function serialize_Osmosis_ConnectResponse(arg) {
 
 function deserialize_Osmosis_ConnectResponse(buffer_arg) {
   return src_osmosis_pb.ConnectResponse.deserializeBinary(
+    new Uint8Array(buffer_arg)
+  );
+}
+
+function serialize_Osmosis_PairConfirm(arg) {
+  if (!(arg instanceof src_osmosis_pb.PairConfirm)) {
+    throw new Error('Expected argument of type Osmosis.PairConfirm');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_Osmosis_PairConfirm(buffer_arg) {
+  return src_osmosis_pb.PairConfirm.deserializeBinary(
     new Uint8Array(buffer_arg)
   );
 }
@@ -66,19 +79,6 @@ function deserialize_Osmosis_PeerList(buffer_arg) {
   return src_osmosis_pb.PeerList.deserializeBinary(new Uint8Array(buffer_arg));
 }
 
-function serialize_Osmosis_UpdateBody(arg) {
-  if (!(arg instanceof src_osmosis_pb.UpdateBody)) {
-    throw new Error('Expected argument of type Osmosis.UpdateBody');
-  }
-  return Buffer.from(arg.serializeBinary());
-}
-
-function deserialize_Osmosis_UpdateBody(buffer_arg) {
-  return src_osmosis_pb.UpdateBody.deserializeBinary(
-    new Uint8Array(buffer_arg)
-  );
-}
-
 function serialize_google_protobuf_Empty(arg) {
   if (!(arg instanceof google_protobuf_empty_pb.Empty)) {
     throw new Error('Expected argument of type google.protobuf.Empty');
@@ -104,6 +104,17 @@ var GatewayService = (exports.GatewayService = {
     responseSerialize: serialize_Osmosis_PairResponse,
     responseDeserialize: deserialize_Osmosis_PairResponse,
   },
+  confirmPair: {
+    path: '/Osmosis.Gateway/ConfirmPair',
+    requestStream: false,
+    responseStream: false,
+    requestType: src_osmosis_pb.PairConfirm,
+    responseType: src_osmosis_pb.PairConfirm,
+    requestSerialize: serialize_Osmosis_PairConfirm,
+    requestDeserialize: deserialize_Osmosis_PairConfirm,
+    responseSerialize: serialize_Osmosis_PairConfirm,
+    responseDeserialize: deserialize_Osmosis_PairConfirm,
+  },
   connect: {
     path: '/Osmosis.Gateway/Connect',
     requestStream: false,
@@ -119,17 +130,6 @@ var GatewayService = (exports.GatewayService = {
 
 exports.GatewayClient = grpc.makeGenericClientConstructor(GatewayService);
 var ConnectionService = (exports.ConnectionService = {
-  update: {
-    path: '/Osmosis.Connection/Update',
-    requestStream: false,
-    responseStream: false,
-    requestType: src_osmosis_pb.UpdateBody,
-    responseType: google_protobuf_empty_pb.Empty,
-    requestSerialize: serialize_Osmosis_UpdateBody,
-    requestDeserialize: deserialize_Osmosis_UpdateBody,
-    responseSerialize: serialize_google_protobuf_Empty,
-    responseDeserialize: deserialize_google_protobuf_Empty,
-  },
   sharePeers: {
     path: '/Osmosis.Connection/SharePeers',
     requestStream: false,
