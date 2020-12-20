@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 
+export const UUID_LENGTH = 16;
+
 export function randomUuid(): Uint8Array {
   const uuid = new Uint8Array(16);
   uuidv4({}, uuid);

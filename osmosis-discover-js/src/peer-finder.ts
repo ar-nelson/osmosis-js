@@ -2,12 +2,11 @@ import broadcastInterfaces from 'broadcast-interfaces';
 import Logger from 'bunyan';
 import * as dgram from 'dgram';
 import { EventEmitter } from 'events';
-import { md, util as forgeUtil } from 'node-forge';
 import { promisify } from 'util';
 import * as uuid from 'uuid';
 import * as proto from './osmosis_pb';
-import { MAX_PEER_NAME_LENGTH, PeerConfig, UUID_LENGTH } from './peer-config';
-import { binaryEqual, ipAddressToUint } from './utils';
+import { MAX_PEER_NAME_LENGTH, PeerConfig } from './peer-config';
+import { binaryEqual, UUID_LENGTH } from './utils';
 
 // Magic number to identify broadcast messages: 05-M-05-15
 const MAGIC = Uint8Array.of(0x05, 0x4d, 0x05, 0x15);
@@ -36,38 +35,18 @@ function heartbeatPacket(
   ifa: HeartbeatInterface,
   gatewayPort: number
 ): Uint8Array {
-  const payload = new proto.Heartbeat.Payload();
-  payload.setAppid(uuid.parse(config.appId) as Uint8Array);
-  payload.setPeerid(uuid.parse(config.peerId) as Uint8Array);
-  payload.setPeername(config.peerName);
-  payload.setIpaddress(ipAddressToUint(ifa.address));
-  payload.setPort(gatewayPort);
-  payload.setCertfingerprint(
-    forgeUtil.binary.hex.decode(config.certFingerprint)
-  );
-
   const heartbeat = new proto.Heartbeat();
-  heartbeat.setPayload(payload);
-  heartbeat.setSignature(heartbeatSignature(payload, config.secretToken));
+  heartbeat.setAppid(uuid.parse(config.appId) as Uint8Array);
+  heartbeat.setPeerid(uuid.parse(config.peerId) as Uint8Array);
+  heartbeat.setPeername(config.peerName);
+  heartbeat.setPort(gatewayPort);
+  heartbeat.setPublickey(config.publicKey);
 
   const unprefixed = heartbeat.serializeBinary();
   const prefixed = new Uint8Array(unprefixed.byteLength + MAGIC.byteLength);
   prefixed.set(MAGIC, 0);
   prefixed.set(unprefixed, MAGIC.byteLength);
   return prefixed;
-}
-
-function heartbeatSignature(
-  payload: proto.Heartbeat.Payload,
-  secretToken: string
-): Uint8Array {
-  const hash = md.sha256.create();
-  hash.update(forgeUtil.binary.raw.encode(payload.serializeBinary()), 'raw');
-  hash.update(
-    forgeUtil.binary.raw.encode(uuid.parse(secretToken) as Uint8Array),
-    'raw'
-  );
-  return forgeUtil.binary.hex.decode(hash.digest().toHex());
 }
 
 function jitter(time: number): number {
@@ -81,8 +60,9 @@ export function heartbeatPortFromAppId(appId: string): number {
 
 export interface PeerFinderEvents {
   heartbeat: (evt: {
-    heartbeat: proto.Heartbeat.Payload;
-    interfaceAddress: string;
+    heartbeat: proto.Heartbeat;
+    localAddress: string;
+    remoteAddress: string;
   }) => void;
   interfaceUp: (ifa: NetworkInterface) => void;
   interfaceDown: (ifa: NetworkInterface) => void;
@@ -112,7 +92,7 @@ class PeerFinder extends EventEmitter {
   constructor(
     private readonly config: PeerConfig,
     private gatewayPort: number,
-    private peerIdToSecretToken: (peerId: string) => string | undefined = () =>
+    private peerIdToPublicKey: (peerId: string) => Buffer | undefined = () =>
       undefined,
     private readonly log: Logger = Logger.createLogger({
       name: 'osmosis-peer-finder',
@@ -326,58 +306,52 @@ class PeerFinder extends EventEmitter {
 
   private receiveHeartbeat(
     packet: Uint8Array,
-    ipAddress: string,
-    interfaceAddress: string
+    remoteAddress: string,
+    localAddress: string
   ) {
     try {
       if (!binaryEqual(MAGIC, packet.subarray(0, MAGIC.byteLength))) {
         this.log.trace(
           'Ignoring broadcast packet from %s: not a heartbeat',
-          ipAddress
+          remoteAddress
         );
         return;
       }
       const heartbeat = proto.Heartbeat.deserializeBinary(
         packet.subarray(MAGIC.byteLength)
       );
-      const payload = heartbeat.getPayload();
-      if (
-        !payload ||
-        this.config.appId !== uuid.stringify(payload.getAppid_asU8())
-      ) {
+      if (this.config.appId !== uuid.stringify(heartbeat.getAppid_asU8())) {
         this.log.trace(
           'Ignoring heartbeat from %s: different appId',
-          ipAddress
+          remoteAddress
         );
         return;
       }
       if (
-        ipAddressToUint(ipAddress) !== payload.getIpaddress() ||
-        payload.getPeerid_asU8().byteLength !== UUID_LENGTH ||
-        payload.getPeername().length > MAX_PEER_NAME_LENGTH ||
-        payload.getPort() < 1024 ||
-        payload.getPort() > 65535
+        heartbeat.getPeerid_asU8().byteLength !== UUID_LENGTH ||
+        heartbeat.getPeername().length > MAX_PEER_NAME_LENGTH ||
+        heartbeat.getPort() < 1024 ||
+        heartbeat.getPort() > 65535
       ) {
         this.log.warn(
           'Ignoring heartbeat from %s: malformed heartbeat packet',
-          ipAddress
+          remoteAddress
         );
         return;
       }
-      const peerId = uuid.stringify(payload.getPeerid_asU8());
+      const peerId = uuid.stringify(heartbeat.getPeerid_asU8());
       if (peerId === this.config.peerId) {
         return;
       }
 
-      const secretToken = this.peerIdToSecretToken(peerId);
-      if (secretToken) {
-        const expectedSignature = heartbeatSignature(payload, secretToken);
-        if (!binaryEqual(heartbeat.getSignature_asU8(), expectedSignature)) {
+      const publicKey = this.peerIdToPublicKey(peerId);
+      if (publicKey) {
+        if (publicKey.toString('base64') !== heartbeat.getPublickey_asB64()) {
           this.log.warn(
-            'Apparent peer %s at %s:%d does not have valid heartbeat signature',
+            'Apparent peer %s at %s:%d has wrong public key',
             peerId,
-            ipAddress,
-            payload.getPort()
+            remoteAddress,
+            heartbeat.getPort()
           );
           return;
         }
@@ -386,8 +360,8 @@ class PeerFinder extends EventEmitter {
       this.log.trace(
         'Received heartbeat for %s at %s:%d',
         peerId,
-        ipAddress,
-        payload.getPort()
+        remoteAddress,
+        heartbeat.getPort()
       );
 
       // Send a pingback to new peers, to ensure they see us
@@ -395,19 +369,19 @@ class PeerFinder extends EventEmitter {
       const now = new Date();
       if (!expiration || expiration < now) {
         this.log.trace('Sending pingback heartbeat to %s', peerId);
-        this.sendHeartbeat(interfaceAddress);
+        this.sendHeartbeat(localAddress);
       }
       this.recentPeers.set(
         peerId,
         new Date(now.getTime() + HEARTBEAT_DELAY * 2)
       );
 
-      this.emit('heartbeat', { heartbeat: payload, interfaceAddress });
+      this.emit('heartbeat', { heartbeat, localAddress, remoteAddress });
     } catch (err) {
       this.log.warn(
         { err },
         'Exception when receiving heartbeat packet from %s',
-        ipAddress
+        remoteAddress
       );
     }
   }

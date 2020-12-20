@@ -19,7 +19,7 @@ if (appId) {
 (async () => {
   const config = await generateConfig(appId);
   log.trace({ config }, 'config generated');
-  const connection = new Connection(config, log);
+  const connection = new Connection(config, {}, log);
 
   const rl = readline.createInterface({
     input: process.stdin,

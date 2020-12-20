@@ -1,77 +1,10 @@
 syntax = "proto3";
-import "google/protobuf/empty.proto";
 package Osmosis;
 
 message Heartbeat {
-  message Payload {
-    bytes appId = 1;
-    bytes peerId = 2;
-    string peerName = 3;
-    uint32 ipAddress = 4;
-    uint32 port = 5;
-    uint64 timestamp = 6;
-    bytes certFingerprint = 7;
-  }
-  Payload payload = 1;
-  bytes signature = 2;
-}
-
-message PeerInfo {
-  bytes peerId = 1;
-  string peerName = 2;
-  bytes secretToken = 3;
-  bytes certFingerprint = 4;
-}
-
-message PairResponse {
-  enum Status {
-    ACCEPTED = 0;
-    REJECTED = 1;
-    ALREADY_PAIRED = 2;
-  }
-  Status status = 1;
-  uint32 pin = 2;
-  oneof payload {
-    PeerInfo peer = 3;
-  }
-}
-
-message PairConfirm {
-  bytes peerId = 1;
-  bool accepted = 2;
-}
-
-message PeerList {
-  repeated PeerInfo peers = 1;
-}
-
-message ConnectRequest {
-  bytes peerId = 1;
-  bytes secretToken = 2;
-  uint32 ipAddress = 3;
+  bytes appId = 1;
+  bytes peerId = 2;
+  string peerName = 3;
   uint32 port = 4;
-}
-
-message ConnectResponse {
-  enum Status {
-    OK = 0;
-    NOT_PAIRED = 1;
-    BAD_TOKEN = 2;
-    CONNECT_FAILED = 3;
-    INTERNAL_ERROR = 4;
-  }
-  Status status = 1;
-  bytes secretToken = 2;
-  uint32 port = 3;
-}
-
-service Gateway {
-  rpc Pair(PeerInfo) returns (PairResponse) {}
-  rpc ConfirmPair(PairConfirm) returns (PairConfirm) {}
-  rpc Connect(ConnectRequest) returns (ConnectResponse) {}
-}
-
-service Connection {
-  rpc SharePeers(PeerList) returns (google.protobuf.Empty) {}
-  rpc Unpair(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  bytes publicKey = 5;
 }
