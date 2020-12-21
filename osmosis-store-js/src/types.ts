@@ -25,7 +25,7 @@ export interface Timestamp {
   index: number;
 }
 
-export function timestampToString({ author, index }: Timestamp) {
+export function timestampToString({ author, index }: Timestamp): string {
   return `${index.toString(32).padStart(11, '0')}@${author}`;
 }
 

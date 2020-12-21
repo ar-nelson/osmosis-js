@@ -276,7 +276,11 @@ export function evalJsonPathExpr(self: Json, expr: JsonPathExpr): Json {
 function adjustIndex(index: number, array: readonly any[]): number {
   let i = Math.floor(index);
   const len = array.length;
-  if (len > 0) while (i < 0) i += len;
+  if (len > 0) {
+    while (i < 0) {
+      i += len;
+    }
+  }
   return i;
 }
 
@@ -289,7 +293,7 @@ function queryPaths1(
   failures: Failure[];
 } {
   let existing: PathArray[] = [];
-  let potential: PathArray[] = [];
+  const potential: PathArray[] = [];
   let failures: Failure[] = [];
   switch (segment.type) {
     case 'Wildcard':
@@ -330,9 +334,11 @@ function queryPaths1(
     case 'MultiKey':
       if (isObject(json)) {
         segment.query.forEach((key) => {
-          if (Object.prototype.hasOwnProperty.call(json, key))
+          if (Object.prototype.hasOwnProperty.call(json, key)) {
             existing.push([key]);
-          else potential.push([key]);
+          } else {
+            potential.push([key]);
+          }
         });
       } else {
         failures = segment.query.map((x) => ({
@@ -344,8 +350,11 @@ function queryPaths1(
     case 'MultiIndex':
       if (Array.isArray(json)) {
         segment.query.forEach((key) => {
-          if (key < json.length) existing.push([adjustIndex(key, json)]);
-          else potential.push([key]);
+          if (key < json.length) {
+            existing.push([adjustIndex(key, json)]);
+          } else {
+            potential.push([key]);
+          }
         });
       } else {
         failures = segment.query.map((x) => ({
@@ -415,8 +424,11 @@ function queryPaths1(
         const start = adjustIndex(step > 0 ? from : to, json);
         const end = adjustIndex(step > 0 ? to : from, json);
         for (let i = start; i < end; i += step) {
-          if (i < json.length) existing.push([i]);
-          else potential.push([i]);
+          if (i < json.length) {
+            existing.push([i]);
+          } else {
+            potential.push([i]);
+          }
         }
       } else {
         failures.push({
@@ -465,8 +477,11 @@ function queryPaths1(
         const start = adjustIndex(step > 0 ? from : to, json);
         const end = adjustIndex(step > 0 ? to : from, json);
         for (let i = start; i < end; i += step) {
-          if (i < json.length) existing.push([i]);
-          else potential.push([i]);
+          if (i < json.length) {
+            existing.push([i]);
+          } else {
+            potential.push([i]);
+          }
         }
       } else {
         failures.push({
@@ -645,7 +660,9 @@ function interpolateExpr([car, ...cdr]: readonly [string, ...any[]]): (
   if (car === 'variable') {
     const [varName] = cdr;
     return (vars) => {
-      if (varName in vars) return ['literal', vars[varName]];
+      if (varName in vars) {
+        return ['literal', vars[varName]];
+      }
       throw new Error(`missing variable in JsonPath: {${varName}}`);
     };
   }
@@ -689,7 +706,7 @@ function compileSegment(
     case 'filter':
       seg = { type: 'Filter', query: segment[1] };
       break;
-    case 'multi':
+    case 'multi': {
       const subscripts = segment.slice(1);
       if (subscripts.every((i) => i[0] === 'index')) {
         seg = {
@@ -709,12 +726,19 @@ function compileSegment(
         });
       }
       break;
+    }
     case 'slice': {
       if (segment.slice(1, 4).every((i) => !i || i[0] === 'index')) {
         const query: any = {};
-        if (segment[1]?.[1]) query.from = segment[1][1];
-        if (segment[2]?.[1]) query.to = segment[2][1];
-        if (segment[3]?.[1]) query.step = segment[3][1];
+        if (segment[1]?.[1]) {
+          query.from = segment[1][1];
+        }
+        if (segment[2]?.[1]) {
+          query.to = segment[2][1];
+        }
+        if (segment[3]?.[1]) {
+          query.step = segment[3][1];
+        }
         seg = { type: 'Slice', query };
         break;
       }
@@ -723,9 +747,15 @@ function compileSegment(
       const step = segment[3] && compileIndex(segment[3]);
       return (vars) => {
         const query: any = {};
-        if (from) query.from = from(vars);
-        if (to) query.to = to(vars);
-        if (step) query.step = step(vars);
+        if (from) {
+          query.from = from(vars);
+        }
+        if (to) {
+          query.to = to(vars);
+        }
+        if (step) {
+          query.step = step(vars);
+        }
         return { type: 'ExprSlice', query };
       };
     }
@@ -762,7 +792,7 @@ export function compileJsonPath(
   path: JsonPath,
   vars: Vars = {}
 ): CompiledJsonPath {
-  let compiled = compileCache.get(path) || compileUncachedJsonPath(path);
+  const compiled = compileCache.get(path) || compileUncachedJsonPath(path);
   return compiled(vars);
 }
 

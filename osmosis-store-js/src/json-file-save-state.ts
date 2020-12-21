@@ -1,6 +1,6 @@
 import { readFileSync, statSync, writeFile } from 'fs';
 import produce, { Draft } from 'immer';
-import { ulid } from 'ulid';
+import * as uuid from 'uuid';
 import { Op, SavePoint, SaveState, timestampIndex } from './store';
 import { Timestamp, Uuid } from './types';
 
@@ -28,12 +28,14 @@ export default class JsonFileSaveState implements SaveState {
       );
     }
     try {
-      if (!stat.isFile) throw true;
+      if (!stat.isFile) {
+        throw true;
+      }
       const json = readFileSync(filename, { encoding: 'utf8' });
       this.saveFile = JSON.parse(json);
     } catch (e) {
       this.saveFile = {
-        uuid: ulid(),
+        uuid: uuid.v4(),
         ops: [],
         savePoints: [],
       };
@@ -44,7 +46,9 @@ export default class JsonFileSaveState implements SaveState {
   private performWrite() {
     this.writeState = WriteState.Writing;
     writeFile(this.filename, JSON.stringify(this.saveFile), (err) => {
-      if (err) console.error(err);
+      if (err) {
+        console.error(err);
+      }
       if (this.writeState === WriteState.Pending) {
         this.performWrite();
       }
@@ -67,29 +71,31 @@ export default class JsonFileSaveState implements SaveState {
     return this.saveFile;
   }
 
-  addOp(op: Op) {
+  addOp(op: Op): void {
     this.saveFile = produce(this.saveFile, ({ ops }) => {
       ops.push(op as Draft<Op>);
     });
     this.scheduleWrite();
   }
 
-  addSavePoint(savePoint: SavePoint) {
+  addSavePoint(savePoint: SavePoint): void {
     this.saveFile = produce(this.saveFile, ({ savePoints }) => {
       savePoints.push(savePoint as Draft<SavePoint>);
     });
     this.scheduleWrite();
   }
 
-  deleteSavePoint(at: Timestamp) {
+  deleteSavePoint(at: Timestamp): void {
     this.saveFile = produce(this.saveFile, ({ savePoints }) => {
       const i = timestampIndex(at, savePoints);
-      if (i > 0) savePoints.splice(i, 1);
+      if (i > 0) {
+        savePoints.splice(i, 1);
+      }
     });
     this.scheduleWrite();
   }
 
-  deleteEverythingAfter(exclusiveLowerBound: Timestamp) {
+  deleteEverythingAfter(exclusiveLowerBound: Timestamp): void {
     this.saveFile = produce(this.saveFile, ({ savePoints, ops }) => {
       const i = timestampIndex(exclusiveLowerBound, savePoints);
       savePoints.splice(i, savePoints.length - i);

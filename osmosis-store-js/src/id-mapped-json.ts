@@ -97,7 +97,9 @@ export function applyIdMappedAction(
     mapAction(action, (x) => x.path),
     root
   );
-  if (result.failed || !action.path.id) return result;
+  if (result.failed || !action.path.id) {
+    return result;
+  }
   const { path, id } = action.path;
   switch (action.action) {
     case 'Set':
@@ -106,7 +108,9 @@ export function applyIdMappedAction(
       if (result.changed.length) {
         const [path] = result.changed;
         const tree = followPath(path, pathToId);
-        for (const id of tree.ids) delete idToPath[timestampToString(id)];
+        for (const id of tree.ids) {
+          delete idToPath[timestampToString(id)];
+        }
         tree.ids = [id];
         idToPath[timestampToString(id)] = path as Draft<PathArray>;
       }
@@ -115,11 +119,12 @@ export function applyIdMappedAction(
     case 'Delete':
       if (result.changed.length) {
         const tree = followPath(path, pathToId);
-        for (const id of tree.ids) delete idToPath[timestampToString(id)];
+        for (const id of tree.ids) {
+          delete idToPath[timestampToString(id)];
+        }
         tree.ids = [];
         if (typeof last(path) === 'number') {
           const parentPath = path.slice(0, path.length - 1);
-          const parent = followPath(parentPath, pathToId);
           const indexes = result.changed.map(last).sort() as number[];
           indexes.forEach((i) => {
             moveTree(
@@ -149,7 +154,6 @@ export function applyIdMappedAction(
     case 'InsertAfter':
       if (result.changed.length) {
         const parentPath = path.slice(0, path.length - 1);
-        const parent = followPath(parentPath, pathToId);
         const indexes = result.changed.map(last).sort() as number[];
         indexes.forEach((i) => {
           moveTree(
@@ -185,8 +189,12 @@ export function splitIntoActionsWithDirectPaths(
                 json,
                 id
               );
-              if (failures.length) throw failures.map((f) => ({ ...f, id }));
-              if (id) id = { ...id, index: id.index + 1 };
+              if (failures.length) {
+                throw failures.map((f) => ({ ...f, id }));
+              }
+              if (id) {
+                id = { ...id, index: id.index + 1 };
+              }
               return actions as ScalarAction<any>[];
             }),
           },
@@ -200,6 +208,7 @@ export function splitIntoActionsWithDirectPaths(
       throw failures;
     }
   }
+  // eslint-disable-next-line prefer-const
   let { existing, potential, failures } = queryPaths(json, action.path);
   failures = failures.map((f) => ({ ...f, id }));
   switch (action.action) {
@@ -283,12 +292,13 @@ export function queryPaths(
   potential: PathArray[];
   failures: Failure[];
 } {
-  if (!path.length)
+  if (!path.length) {
     return {
       existing: [[]],
       potential: [],
       failures: [],
     };
+  }
   const [first, ...rest] = path as CompiledJsonIdPath;
   if (first.type === 'Id') {
     const idPath = idToPath[timestampToString(first.query.id)];
@@ -321,7 +331,9 @@ export function queryValues(
   { root, idToPath }: IdMappedJson,
   path: CompiledJsonPath | CompiledJsonIdPath
 ): Json[] {
-  if (!path.length) return [root];
+  if (!path.length) {
+    return [root];
+  }
   const [first, ...rest] = path as CompiledJsonIdPath;
   if (first.type === 'Id') {
     const idPath = idToPath[timestampToString(first.query.id)];
@@ -353,17 +365,22 @@ export function anchorPathToId(
   for (let i = 0; i < path.length; i++) {
     const segment = path[i];
     if (tree?.subtree && (segment.type === 'Index' || segment.type === 'Key')) {
-      if (!Object.prototype.hasOwnProperty.call(tree.subtree, segment.query))
+      if (!Object.prototype.hasOwnProperty.call(tree.subtree, segment.query)) {
         break;
+      }
       tree = tree.subtree[segment.query];
       queryPath.push(segment.query);
       if (tree?.ids?.length) {
         lastIdIndex = i;
         lastId = tree.ids[0];
       }
-    } else break;
+    } else {
+      break;
+    }
   }
-  if (!lastId) return path;
+  if (!lastId) {
+    return path;
+  }
   return [
     { type: 'Id', query: { id: lastId, path: queryPath } },
     ...path.slice(lastIdIndex + 1),

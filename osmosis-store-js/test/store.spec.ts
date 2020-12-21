@@ -1,16 +1,13 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
-import { monotonicFactory } from 'ulid';
 import { Action } from '../src/actions';
 import { Store, timestampIndex, ZERO_TIMESTAMP } from '../src/store';
 import { Json, timestampToString } from '../src/types';
 import MockSaveState from './mock-save-state';
 
 describe('Store', function () {
-  const ulid = monotonicFactory();
-  const now = +Date.now();
-  const UUID1 = ulid(now);
-  const UUID2 = ulid(now);
+  const UUID1 = '1cca2959-e698-4bf2-853b-2957a51a86cc';
+  const UUID2 = 'ecdb8ebf-e896-45e9-8bf9-1cf99db583b0';
 
   it('should set and query a single value', function () {
     const store = new Store(new MockSaveState(UUID1));
@@ -328,7 +325,7 @@ describe('Store', function () {
         store1.ops.slice(lastOp1)
       );
       if (!allowFailures) {
-        expect(failures1).to.eql([], 'failure merging store1 into store2');
+        expect(failures2).to.eql([], 'failure merging store1 into store2');
       }
       lastOp1 = store1.ops.length;
       lastOp2 = store2.ops.length;

@@ -30,9 +30,9 @@ import {
   Uuid,
   OsmosisFailureError,
 } from './types';
+import * as uuid from 'uuid';
 
-export const ZERO_UUID: Uuid = '00000000000000000000000000';
-export const ZERO_TIMESTAMP: Timestamp = { author: ZERO_UUID, index: 0 };
+export const ZERO_TIMESTAMP: Timestamp = { author: uuid.NIL, index: 0 };
 
 export interface CausalTree {
   readonly timestamp: Timestamp;
@@ -66,7 +66,7 @@ const MIN_SAVE_POINT_SIZE = 4;
 export function timestampIndex(
   timestamp: Timestamp,
   ops: readonly { timestamp: Timestamp }[],
-  expectMatch: boolean = false
+  expectMatch = false
 ): number {
   const i = sortedIndexBy(ops, { timestamp }, (x) =>
     timestampToString(x.timestamp)
@@ -88,6 +88,7 @@ export class Store {
   private queryListeners: QueryListener[] = [];
 
   constructor(public readonly saveState: SaveState) {
+    // eslint-disable-next-line prefer-const
     let { uuid, ops, savePoints } = saveState.load();
     if (!savePoints.length) {
       const firstSavePoint = {
@@ -119,7 +120,7 @@ export class Store {
 
   dispatch(
     action: JsonPathAction,
-    returnFailures: boolean = false
+    returnFailures = false
   ): Failure[] | undefined {
     const processedActions = mapActionToList(
       compileJsonPathAction(action),
@@ -139,7 +140,9 @@ export class Store {
         op,
         SaveChanges.WhenChanged
       );
-      if (changed.length) this.state = state;
+      if (changed.length) {
+        this.state = state;
+      }
       return failures;
     });
     if (returnFailures) {
@@ -153,12 +156,16 @@ export class Store {
   }
 
   mergeOps(ops: Op[]): { changed: PathArray[]; failures: Failure[] } {
-    if (!ops.length) return { changed: [], failures: [] };
+    if (!ops.length) {
+      return { changed: [], failures: [] };
+    }
 
     let earliestInsertionIndex = this.state.ops.length;
     const { ops: opsWithInsertions } = produce(this.state, (state) => {
       (ops as Draft<Op>[]).forEach((op) => {
-        if (timestampIndex(op.timestamp, this.state.ops, true) >= 0) return;
+        if (timestampIndex(op.timestamp, this.state.ops, true) >= 0) {
+          return;
+        }
         const index = timestampIndex(op.timestamp, state.ops);
         state.ops.splice(index, 0, op);
         earliestInsertionIndex = Math.min(earliestInsertionIndex, index);
@@ -168,8 +175,8 @@ export class Store {
       opsWithInsertions[earliestInsertionIndex].timestamp
     );
 
-    let opIndexOfLastSavePoint: number = -1;
-    let initialState = produce(this.state, (state) => {
+    let opIndexOfLastSavePoint = -1;
+    const initialState = produce(this.state, (state) => {
       let indexOfLastSavePoint = -1;
       let lastSavePoint: Draft<SavePoint> | undefined;
       for (let i = state.savePoints.length - 1; i >= 0; i--) {
@@ -223,11 +230,10 @@ export class Store {
     saveChanges: SaveChanges,
     state: State = this.state
   ): { state: State; changed: PathArray[]; failures: Failure[] } {
-    let { actions, failures: totalFailures } = splitIntoActionsWithDirectPaths(
-      op,
-      state,
-      op.timestamp
-    );
+    const {
+      actions,
+      failures: totalFailures,
+    } = splitIntoActionsWithDirectPaths(op, state, op.timestamp);
     let totalChanged: PathArray[] = [];
     const directActions = flatMap(actions, (a) =>
       a.action === 'Transaction' ? a.payload : [a]
@@ -235,8 +241,11 @@ export class Store {
     let newState = produce(state, (state) => {
       directActions.forEach((action) => {
         const result = applyIdMappedAction(action, state);
-        if (result.failed) totalFailures.push(result.failure);
-        else totalChanged.push(...result.changed);
+        if (result.failed) {
+          totalFailures.push(result.failure);
+        } else {
+          totalChanged.push(...result.changed);
+        }
       });
     });
     if (op.action === 'Transaction' && totalFailures.length) {
@@ -337,8 +346,8 @@ export interface SaveState {
     readonly ops: readonly Op[];
     readonly savePoints: readonly SavePoint[];
   };
-  addOp(op: Op);
-  addSavePoint(savePoint: SavePoint);
-  deleteSavePoint(at: Timestamp);
-  deleteEverythingAfter(exclusiveLowerBound: Timestamp);
+  addOp(op: Op): void;
+  addSavePoint(savePoint: SavePoint): void;
+  deleteSavePoint(at: Timestamp): void;
+  deleteEverythingAfter(exclusiveLowerBound: Timestamp): void;
 }

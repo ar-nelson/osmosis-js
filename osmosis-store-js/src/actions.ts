@@ -100,14 +100,18 @@ export function applyAction(
     } {
   const { path } = action;
   const foundPath = followPath(path, json);
-  if (foundPath.failed) return foundPath;
+  if (foundPath.failed) {
+    return foundPath;
+  }
   const { key, parent, value } = foundPath;
   switch (action.action) {
     case 'Set':
       parent[key] = action.payload;
       return { changed: [path] };
     case 'Delete':
-      if (value === undefined) return { changed: [] };
+      if (value === undefined) {
+        return { changed: [] };
+      }
       if (Array.isArray(parent) && typeof key === 'number') {
         parent.splice(key as number, 1);
         return { changed: elementsAfter(path, parent.length + 1) };
@@ -118,8 +122,11 @@ export function applyAction(
     case 'Add':
     case 'Multiply':
       if (typeof value === 'number') {
-        if (action.action === 'Multiply') parent[key] *= action.payload;
-        else parent[key] += action.payload;
+        if (action.action === 'Multiply') {
+          parent[key] *= action.payload;
+        } else {
+          parent[key] += action.payload;
+        }
         return { changed: [path] };
       } else {
         return {
@@ -128,25 +135,32 @@ export function applyAction(
         };
       }
     case 'InitArray':
-      if (Array.isArray(value)) return { changed: [] };
+      if (Array.isArray(value)) {
+        return { changed: [] };
+      }
       parent[key] = [];
       return { changed: [path] };
     case 'InitObject':
-      if (isPlainObject(value)) return { changed: [] };
+      if (isPlainObject(value)) {
+        return { changed: [] };
+      }
       parent[key] = {};
       return { changed: [path] };
     case 'InsertBefore':
-    case 'InsertAfter':
+    case 'InsertAfter': {
       const parentPath = path.slice(0, path.length - 1);
       if (Array.isArray(parent) && typeof key === 'number') {
-        if (key >= parent.length) parent.push(action.payload);
-        else if (key < 0) parent.splice(0, 0, action.payload);
-        else
+        if (key >= parent.length) {
+          parent.push(action.payload);
+        } else if (key < 0) {
+          parent.splice(0, 0, action.payload);
+        } else {
           parent.splice(
             action.action === 'InsertAfter' ? key + 1 : key,
             0,
             action.payload
           );
+        }
         return { changed: elementsAfter(path, parent.length) };
       }
       return {
@@ -156,6 +170,7 @@ export function applyAction(
           message: `${action.action}: not an array`,
         },
       };
+    }
     case 'InsertUnique':
       if (Array.isArray(value)) {
         if (!value.some((x) => isEqual(x, action.payload))) {
@@ -168,7 +183,7 @@ export function applyAction(
         failure: { path, message: 'InsertUnique: not an array' },
       };
     case 'Move':
-    case 'Copy':
+    case 'Copy': {
       if (value === undefined) {
         return {
           failed: true,
@@ -179,14 +194,20 @@ export function applyAction(
         };
       }
       const toPath = followPath(action.payload, json);
-      if (toPath.failed) return toPath;
+      if (toPath.failed) {
+        return toPath;
+      }
       toPath.parent[toPath.key] = value;
       if (action.action === 'Move') {
-        if (Array.isArray(parent)) parent[key] = null;
-        else delete parent[key];
+        if (Array.isArray(parent)) {
+          parent[key] = null;
+        } else {
+          delete parent[key];
+        }
         return { changed: [path, action.payload] };
       }
       return { changed: [action.payload] };
+    }
     default:
       return {
         failed: true,
@@ -238,8 +259,9 @@ export function mapActionToList<T, U>(
       ];
     case 'Copy': {
       const path = f(action.path);
-      if (path.length !== 1)
+      if (path.length !== 1) {
         throw new Error('Copy action must have exactly one source path');
+      }
       return flatMap(f(action.payload), (payload) => ({
         ...action,
         path: path[0],
@@ -249,10 +271,12 @@ export function mapActionToList<T, U>(
     case 'Move': {
       const path = f(action.path);
       const payload = f(action.payload);
-      if (path.length !== 1)
+      if (path.length !== 1) {
         throw new Error('Move action must have exactly one source path');
-      if (payload.length !== 1)
+      }
+      if (payload.length !== 1) {
         throw new Error('Move action must have exactly one destination path');
+      }
       return [{ ...action, path: path[0], payload: payload[0] }];
     }
     default:
