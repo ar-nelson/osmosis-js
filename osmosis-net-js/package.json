@@ -1,7 +1,7 @@
 {
-  "name": "@nels.onl/osmosis-discover-js",
+  "name": "@nels.onl/osmosis-net-js",
   "version": "0.1",
-  "description": "UDP service discovery and pairing for Osmosis",
+  "description": "Osmosis network stack: UDP peer discovery and encrypted JSON-RPC",
   "main": "dist/index.js",
   "author": "Adam Nelson <adam@nels.onl>",
   "license": "BlueOak-1.0.0",
@@ -10,8 +10,6 @@
     "build": "tsc && babel src --out-dir dist --extensions .ts && cp -f src/*.js dist/",
     "clean": "rm -rf dist build",
     "lint": "eslint --ext ts src",
-    "prestart": "yarn build",
-    "start": "node --unhandled-rejections=strict dist/index.js 99804c7c-2abb-42ee-94e8-2a5d6cbc5f55 | bunyan -o short",
     "test": "rm -f test.log; mocha || bunyan --no-pager -o short test.log"
   },
   "dependencies": {
