@@ -59,6 +59,7 @@ interface EncryptedSocketEvents {
   badMessage: (err: Error) => void;
   noPublicKey: (peerId: string) => void;
   error: (err: Error) => void;
+  close: (hadError: boolean) => void;
 }
 
 class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
@@ -112,6 +113,7 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
     }
     socket.on('data', (data) => this.read(data));
     socket.on('error', (err) => this.emit('error', err));
+    socket.on('close', (hadError) => this.emit('close', hadError));
   }
 
   private async read(data: Buffer) {
@@ -311,6 +313,7 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
     if (!this.closed) {
       this.log.trace('EncryptedSocket closed');
       this.socket.unref();
+      this.socket.destroy();
       this.closed = true;
     }
   }

@@ -10,10 +10,18 @@ import {
   RpcMetadata,
   MethodHandlers,
 } from './rpc-sockets';
+import {
+  crypto_box_keypair,
+  crypto_box_PUBLICKEYBYTES,
+  crypto_box_SECRETKEYBYTES,
+  sodium_malloc,
+} from 'sodium-native';
 import * as proto from './osmosis_pb';
 import { randomBytes } from 'crypto';
 import assert from 'assert';
+import { createConnection, Socket } from 'net';
 
+const VISIBLE_PEER_LIFETIME = HEARTBEAT_DELAY * 3;
 const PAIR_TIMEOUT_MS = 30 * 1000;
 
 interface PairRequest {
@@ -27,18 +35,25 @@ interface PairResponse {
   pin: number;
 }
 
+interface ConnectRequest {
+  publicKey: string;
+}
+
+interface ConnectResponse {
+  publicKey: string;
+  port: number;
+}
+
 type GatewayMethods = {
   'osmosis.net.pair': (params: PairRequest) => Promise<PairResponse>;
-  'osmosis.net.connect': (params: {
-    port: number;
-  }) => Promise<{ port: number }>;
+  'osmosis.net.connect': (params: ConnectRequest) => Promise<ConnectResponse>;
 };
 
 type ConnectionMethods = {
   'osmosis.net.sharePeers': (
     peers: { peerId: string; peerName: string; publicKey: string }[]
   ) => Promise<void>;
-  'osmosis.net.unpair': (params: {}) => Promise<void>;
+  'osmosis.net.unpair': (params: any) => Promise<void>;
 };
 
 interface VisiblePeer {
@@ -53,8 +68,10 @@ interface VisiblePeer {
 
 interface ConnectedPeer {
   readonly peerId: string;
-  readonly ipAddress: string;
-  clientPort?: number;
+  readonly peerName: string;
+  readonly remoteAddress: string;
+  port?: number;
+  server?: RpcServer<ConnectionMethods>;
   client?: RpcSocket<ConnectionMethods>;
 }
 
@@ -78,14 +95,13 @@ export interface ConnectionEvents {
   stop: () => void;
 }
 
-class Connection<
+class OsmosisConnection<
   Methods extends MethodHandlers
 > extends TypedEventEmitter<ConnectionEvents> {
   private peerFinder?: PeerFinder;
+  private expireTimer?: ReturnType<typeof setInterval>;
   private gatewayPort?: number;
   private gatewayServer?: RpcServer<GatewayMethods>;
-  private connectionPort?: number;
-  private connectionServer?: RpcServer<ConnectionMethods & Methods>;
   private visiblePeers = new Map<string, VisiblePeer>();
   private connectedPeers = new Map<string, ConnectedPeer>();
   private pairRequests = new Map<string, (pin: number | false) => void>();
@@ -121,21 +137,6 @@ class Connection<
       },
     });
     this.log.info('Gateway service active on port %d', this.gatewayPort);
-    this.connectionPort = await getPort();
-    this.connectionServer = new RpcServer<ConnectionMethods & Methods>({
-      port: this.connectionPort,
-      peerId: this.config.peerId,
-      privateKey: this.config.privateKey,
-      publicKey: this.config.publicKey,
-      peerIdToPublicKey: this.peerIdToPublicKey.bind(this),
-      logger: this.log,
-      methodHandlers: {
-        ...this.methodHandlers,
-        'osmosis.net.sharePeers': this.onSharePeers.bind(this),
-        'osmosis.net.unpair': this.onUnpair.bind(this),
-      },
-    });
-    this.log.info('Connection service active on port %d', this.connectionPort);
     this.peerFinder = new PeerFinder(
       this.config,
       this.gatewayPort,
@@ -144,6 +145,10 @@ class Connection<
       this.log
     );
     this.peerFinder.on('heartbeat', this.receiveHeartbeat.bind(this));
+    this.expireTimer = setInterval(
+      this.expirePeers.bind(this),
+      HEARTBEAT_DELAY
+    );
     this.emit('start');
   }
 
@@ -163,14 +168,17 @@ class Connection<
       this.gatewayServer = undefined;
     }
     this.gatewayPort = undefined;
-    const connection = this.connectionServer;
-    if (connection) {
-      connection.close();
-      this.connectionServer = undefined;
-    }
-    this.connectionPort = undefined;
+    this.connectedPeers.forEach((peer) => {
+      peer.client?.close();
+      peer.server?.close();
+    });
+    this.connectedPeers.clear();
     this.peerFinder?.stop();
     this.peerFinder = undefined;
+    if (this.expireTimer) {
+      clearInterval(this.expireTimer);
+      this.expireTimer = undefined;
+    }
     this.emit('stop');
   }
 
@@ -203,12 +211,18 @@ class Connection<
       heartbeat.getPort() !== visible.port
     ) {
       this.log.warn(
-        'Multiple heartbeats for peerId %s (existing %s:%d, ignored %s:%d)',
-        peerId,
-        visible.remoteAddress,
-        visible.port,
-        remoteAddress,
-        heartbeat.getPort()
+        {
+          peerId,
+          existing: {
+            remoteAddress: visible.remoteAddress,
+            port: visible.port,
+          },
+          ignored: {
+            remoteAddress,
+            port: heartbeat.getPort(),
+          },
+        },
+        'Multiple heartbeats for same peerId'
       );
       return;
     }
@@ -221,14 +235,39 @@ class Connection<
     visible.expiresAt = new Date(now.getTime() + HEARTBEAT_DELAY * 3);
     if (pushVisible) {
       this.log.info(
-        'New peer found: %s (%s) at %s:%d',
-        visible.peerName,
-        peerId,
-        visible.remoteAddress,
-        visible.port
+        {
+          peerId,
+          peerName: visible.peerName,
+          remoteAddress: visible.remoteAddress,
+          port: visible.port,
+        },
+        'New peer found'
       );
       this.visiblePeers.set(peerId, visible);
+      this.emit('peerAppeared', this.exportPeer(visible));
     }
+  }
+
+  private expirePeers() {
+    this.visiblePeers.forEach((peer) => {
+      if (
+        peer.expiresAt < new Date() &&
+        !this.connectedPeers.has(peer.peerId)
+      ) {
+        this.log.info(
+          {
+            peerId: peer.peerId,
+            peerName: peer.peerName,
+            remoteAddress: peer.remoteAddress,
+            port: peer.port,
+          },
+          'Peer expired after %dms with no heartbeat',
+          VISIBLE_PEER_LIFETIME
+        );
+        this.visiblePeers.delete(peer.peerId);
+        this.emit('peerDisappeared', this.exportPeer(peer));
+      }
+    });
   }
 
   private async onPair(
@@ -297,62 +336,104 @@ class Connection<
   }
 
   private async onConnect(
-    params: { port: number },
+    params: ConnectRequest,
     { remotePeerId, remoteAddress }: RpcMetadata
-  ): Promise<{ port: number }> {
+  ): Promise<ConnectResponse> {
+    const visible = this.visiblePeers.get(remotePeerId);
+    if (!visible) {
+      this.log.warn(
+        { remotePeerId, remoteAddress },
+        `Rejected connection attempt from peer with no visible heartbeat`
+      );
+      throw {
+        code: 201,
+        message: 'Heartbeat not received first',
+      };
+    }
     const paired = this.config.pairedPeers.find(
       (p) => p.peerId === remotePeerId
     );
     if (!paired) {
       this.log.warn(
-        `Rejected connection attempt fron unpaired peer %s`,
-        remotePeerId
+        { remotePeerId, remoteAddress },
+        `Rejected connection attempt fron unpaired peer`
       );
       throw {
-        code: 201,
+        code: 202,
         message: 'Not paired',
       };
-    } else {
-      this.log.info('Connection request from peer %s', remotePeerId);
-      const connectedPeer: ConnectedPeer = {
-        peerId: remotePeerId,
-        ipAddress: remoteAddress,
-        clientPort: params.port,
-      };
-      this.connectedPeers.set(remotePeerId, connectedPeer);
-      try {
-        assert(this.connectionServer != null);
-        const client = await this.connectionServer.connect(
-          params.port,
-          remoteAddress
-        );
-        connectedPeer.client = client;
-        client.callMethod(
-          'osmosis.net.sharePeers',
-          this.config.pairedPeers.map((p) => ({
-            ...p,
-            publicKey: p.publicKey.toString('base64'),
-          })),
-          true
-        );
-        this.log.trace(
-          'Successfully connected to %s, sending response',
-          remotePeerId
-        );
-        return { port: this.connectionPort as number };
-      } catch (err) {
-        this.log.error(
-          { err },
-          "Connection to %s failed: our client could not connect to peer's server",
-          remotePeerId
-        );
-        this.disconnectPeer(remotePeerId);
-        throw {
-          code: 202,
-          message: 'Could not establish RPC connection',
-        };
-      }
     }
+    this.log.info({ remotePeerId, remoteAddress }, 'Got connection request');
+    const remotePublicKey = Buffer.from(params.publicKey, 'base64');
+    const localPublicKey = sodium_malloc(crypto_box_PUBLICKEYBYTES);
+    const localPrivateKey = sodium_malloc(crypto_box_SECRETKEYBYTES);
+    crypto_box_keypair(localPublicKey, localPrivateKey);
+    const port = await getPort();
+    const server = new RpcServer<ConnectionMethods & Methods>({
+      port,
+      peerId: this.config.peerId,
+      privateKey: localPrivateKey,
+      publicKey: localPublicKey,
+      peerIdToPublicKey(peerId) {
+        if (peerId === remotePeerId) {
+          return remotePublicKey;
+        }
+      },
+      logger: this.log,
+      methodHandlers: {
+        ...this.methodHandlers,
+        'osmosis.net.sharePeers': this.onSharePeers.bind(this),
+        'osmosis.net.unpair': this.onUnpair.bind(this),
+      },
+    });
+    this.log.trace(
+      { remotePeerId, remoteAddress, port },
+      'Opened private RPC port for connection'
+    );
+    const connectedPeer: ConnectedPeer = {
+      peerId: remotePeerId,
+      peerName: visible.peerName,
+      remoteAddress,
+      port,
+      server,
+    };
+    this.connectedPeers.set(remotePeerId, connectedPeer);
+    const timer = setTimeout(() => {
+      this.log.error(
+        { remotePeerId, remoteAddress, port },
+        'Connection attempt timed out'
+      );
+      this.disconnectPeer(remotePeerId);
+    }, 5000);
+    server.on('connection', (client) => {
+      if (
+        client.socket.remoteAddress !== remoteAddress ||
+        connectedPeer.client
+      ) {
+        client.close();
+        return;
+      }
+      this.log.trace(
+        { remotePeerId, remoteAddress, port },
+        'Got connection on private port'
+      );
+      clearTimeout(timer);
+      client.on('close', () => this.disconnectPeer(remotePeerId));
+      connectedPeer.client = client;
+      client.callMethod(
+        'osmosis.net.sharePeers',
+        this.config.pairedPeers.map((p) => ({
+          ...p,
+          publicKey: p.publicKey.toString('base64'),
+        })),
+        true
+      );
+      this.emit('peerConnected', this.exportPeer(visible));
+    });
+    return {
+      port,
+      publicKey: localPublicKey.toString('base64'),
+    };
   }
 
   private async onSharePeers(
@@ -431,19 +512,19 @@ class Connection<
       this.config.pairedPeers.push({
         peerId,
         peerName: peer.peerName,
-        publicKey: this.config.publicKey,
+        publicKey: peer.publicKey,
       });
       accepted = true;
       this.connectPeer(peer);
     } catch (error) {
       switch (error.code) {
-        case 201:
+        case 102:
           this.log.warn(
             'Pair request to %s is redundant; this peer is already paired',
             peerId
           );
           break;
-        case 202:
+        case 103:
           this.log.info('Pair request to %s was rejected', peerId);
           break;
         default:
@@ -478,17 +559,17 @@ class Connection<
 
   private async connectPeer(peer: VisiblePeer): Promise<void> {
     this.log.info(
-      'Connecting to %s at %s:%d',
-      peer.peerId,
-      peer.remoteAddress,
-      peer.port
+      {
+        peerId: peer.peerId,
+        remoteAddress: peer.remoteAddress,
+        port: peer.port,
+      },
+      'Sending connection request'
     );
 
-    const connectedPeer: ConnectedPeer = {
-      peerId: peer.peerId,
-      ipAddress: peer.remoteAddress,
-    };
-    this.connectedPeers.set(peer.peerId, connectedPeer);
+    const localPublicKey = sodium_malloc(crypto_box_PUBLICKEYBYTES);
+    const localPrivateKey = sodium_malloc(crypto_box_SECRETKEYBYTES);
+    crypto_box_keypair(localPublicKey, localPrivateKey);
 
     assert(this.gatewayServer != null);
     const gatewaySocket = await this.gatewayServer.connect(
@@ -496,48 +577,80 @@ class Connection<
       peer.remoteAddress,
       Buffer.from(peer.publicKey)
     );
+
+    let response: ConnectResponse;
     try {
-      assert(this.connectionPort != null);
-      const { port } = await gatewaySocket.callMethod('osmosis.net.connect', {
-        port: this.connectionPort,
+      response = await gatewaySocket.callMethod('osmosis.net.connect', {
+        publicKey: localPublicKey.toString('base64'),
       });
-      this.log.trace('OK connection response from %s', peer.peerId);
-      connectedPeer.clientPort = port;
-      try {
-        assert(this.connectionServer != null);
-        const client = await this.connectionServer.connect(
-          port,
-          peer.remoteAddress
-        );
-        connectedPeer.client = client;
-        client.callMethod(
-          'osmosis.net.sharePeers',
-          this.config.pairedPeers.map((p) => ({
-            ...p,
-            publicKey: p.publicKey.toString('base64'),
-          })),
-          true
-        );
-        this.log.trace('Successfully connected to %s', peer.peerId);
-      } catch (err) {
-        this.log.error(
-          { err },
-          "Connection to %s failed: our client could not connect to peer's server",
-          peer.peerId
-        );
-        this.disconnectPeer(peer.peerId);
-      }
-    } catch (err) {
-      if (err.code && err.message) {
-        this.log.error('Connection to %s failed: %s', err.message);
-      } else {
-        this.log.error(
-          { err },
-          'Unhandled exception when sending connection request'
-        );
-      }
     } finally {
       gatewaySocket.close();
+    }
+    this.log.trace(
+      {
+        peerId: peer.peerId,
+        remoteAddress: peer.remoteAddress,
+        port: response.port,
+      },
+      'Got connection response with private server port'
+    );
+
+    const remotePublicKey = Buffer.from(response.publicKey, 'base64');
+    const socket: Socket = await new Promise((resolve) => {
+      let socket: Socket;
+      // eslint-disable-next-line prefer-const
+      socket = createConnection(response.port, peer.remoteAddress, () =>
+        resolve(socket)
+      );
+    });
+    try {
+      const client = new RpcSocket(
+        socket,
+        {
+          port: response.port,
+          peerId: this.config.peerId,
+          privateKey: localPrivateKey,
+          publicKey: localPublicKey,
+          peerIdToPublicKey(peerId) {
+            if (peerId === peer.peerId) {
+              return remotePublicKey;
+            }
+          },
+          logger: this.log,
+          methodHandlers: {
+            ...this.methodHandlers,
+            'osmosis.net.sharePeers': this.onSharePeers.bind(this),
+            'osmosis.net.unpair': this.onUnpair.bind(this),
+          },
+        },
+        remotePublicKey
+      );
+      const connectedPeer: ConnectedPeer = {
+        peerId: peer.peerId,
+        peerName: peer.peerName,
+        remoteAddress: peer.remoteAddress,
+        port: response.port,
+        client,
+      };
+      this.connectedPeers.set(peer.peerId, connectedPeer);
+      client.callMethod(
+        'osmosis.net.sharePeers',
+        this.config.pairedPeers.map((p) => ({
+          ...p,
+          publicKey: p.publicKey.toString('base64'),
+        })),
+        true
+      );
+      this.emit('peerConnected', this.exportPeer(peer));
+    } catch (err) {
+      this.log.error(
+        { err },
+        "Connection to %s failed: our client could not connect to peer's server",
+        peer.peerId
+      );
+      socket.unref();
+      socket.destroy();
+      this.disconnectPeer(peer.peerId);
     }
   }
 
@@ -548,9 +661,46 @@ class Connection<
       return false;
     }
     this.log.trace('Disconnecting peer %s', peerId);
+    connected.server?.close();
     connected.client?.close();
     this.connectedPeers.delete(peerId);
+    this.emit('peerDisconnected', {
+      id: peerId,
+      name: connected.peerName,
+      ipAddress: connected.remoteAddress,
+      paired: true,
+      connected: false,
+    });
     return true;
+  }
+
+  callMethod<M extends keyof Methods>(
+    peerId: string,
+    method: M,
+    params: Parameters<Methods[M]>[0],
+    notification?: boolean,
+    timeout?: number
+  ): Promise<ReturnType<Methods[M]>>;
+
+  callMethod<M extends keyof Methods>(
+    peerId: string,
+    method: M,
+    params: Parameters<Methods[M]>[0],
+    notification: true
+  ): Promise<void>;
+
+  callMethod<M extends keyof Methods>(
+    peerId: string,
+    method: M,
+    params: Parameters<Methods[M]>[0],
+    notification = false,
+    timeout?: number
+  ): Promise<any> {
+    const peer = this.connectedPeers.get(peerId);
+    if (!peer || !peer.client) {
+      throw new Error(`No connected peer with ID ${peerId}`);
+    }
+    return peer.client.callMethod(method as any, params, notification, timeout);
   }
 
   private exportPeer(peer: VisiblePeer): Peer {
@@ -568,4 +718,4 @@ class Connection<
   }
 }
 
-export default Connection;
+export default OsmosisConnection;

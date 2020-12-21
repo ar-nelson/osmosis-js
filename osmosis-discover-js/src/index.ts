@@ -2,7 +2,7 @@ import assert from 'assert';
 import Logger from 'bunyan';
 import readline from 'readline';
 import * as uuid from 'uuid';
-import Connection from './connection';
+import OsmosisConnection from './osmosis-connection';
 import { generateConfig } from './peer-config';
 
 const log = Logger.createLogger({
@@ -19,24 +19,18 @@ if (appId) {
 (async () => {
   const config = await generateConfig(appId);
   log.trace({ config }, 'config generated');
-  const connection = new Connection(config, {}, log);
+  const connection = new OsmosisConnection(config, {}, log);
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
-  connection.on('pairRequest', (peer) => {
-    rl.question(`Pair request from ${peer.id}, enter PIN:`, (pin) => {
-      connection.acceptPairRequest(peer.id, +pin);
-    });
-  });
-
   let running = true;
   while (running) {
     try {
       const input: string = await new Promise((resolve) =>
-        rl.question('>', resolve)
+        rl.question('Enter "expect", "pair", or "exit":\n', resolve)
       );
       const words = input.trim().split(/\s+/);
       if (words.length === 0) {
@@ -49,12 +43,23 @@ if (appId) {
           connection.stop();
           running = false;
           break;
+        case 'expect':
+          log.info('waiting on pair request');
+          connection.on('pairRequest', (peer) => {
+            log.info({ peer }, 'got pair request');
+            rl.question(`Pair request from ${peer.id}, enter PIN:\n`, (pin) => {
+              connection.acceptPairRequest(peer.id, +pin);
+            });
+          });
+          running = false;
+          break;
         case 'pair':
-          await connection.pair(words[1]);
+          await connection.pair(connection.peers[0].id);
           break;
       }
     } catch (err) {
       log.error({ err }, 'error in command line');
     }
+    rl.close();
   }
 })();

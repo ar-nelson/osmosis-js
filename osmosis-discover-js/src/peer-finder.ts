@@ -84,6 +84,7 @@ declare interface PeerFinder {
 
 class PeerFinder extends EventEmitter {
   private intervalTimer?: ReturnType<typeof setInterval>;
+  private heartbeatTimer?: ReturnType<typeof setTimeout>;
   private readonly heartbeatPort: number;
   private interfaces = new Map<string, HeartbeatInterface>();
   private faultyInterfaces = new Map<string, FaultyInterface>();
@@ -116,6 +117,11 @@ class PeerFinder extends EventEmitter {
     this.log.info('Stopping peer finder');
     if (this.intervalTimer) {
       clearInterval(this.intervalTimer);
+      this.intervalTimer = undefined;
+    }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
     }
     for (const [, ifa] of this.interfaces) {
       this.shutdownInterface(ifa);
@@ -258,13 +264,15 @@ class PeerFinder extends EventEmitter {
       if (!(await this.sendHeartbeat(interfaceAddress))) {
         return;
       }
-      await new Promise((resolve) =>
-        setTimeout(resolve, jitter(seconds * 1000))
+      await new Promise(
+        (resolve) =>
+          (this.heartbeatTimer = setTimeout(resolve, jitter(seconds * 1000)))
       );
     }
     while (await this.sendHeartbeat(interfaceAddress)) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, jitter(HEARTBEAT_DELAY))
+      await new Promise(
+        (resolve) =>
+          (this.heartbeatTimer = setTimeout(resolve, jitter(HEARTBEAT_DELAY)))
       );
     }
   }

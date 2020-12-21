@@ -286,7 +286,7 @@ export class RpcSocket<Methods extends MethodHandlers> extends EncryptedSocket {
     params: Parameters<Methods[M]>[0],
     notification?: boolean,
     timeout?: number
-  ): Promise<any>;
+  ): Promise<ReturnType<Methods[M]>>;
 
   callMethod<M extends keyof Methods>(
     method: M,
