@@ -144,7 +144,7 @@ Finally, the pairing process uses some actions that operate on network state ins
 
 The first time an Osmosis instance is created, it generates a Peer ID and a public/private keypair. This data should be saved to disk, and loaded every time this Osmosis instance is started.
 
-Osmosis uses two kinds of sockets: broadcast UDP sockets that send heartbeat packets, and unicast TCP sockets that send [sodium][sodium]-encrypted, [zstandard][zstd]-compressed [JSON-RPC][jsonrpc] messages.
+Osmosis uses two kinds of sockets: broadcast UDP sockets that send heartbeat packets, and unicast TCP sockets that send [Monocypher][monocypher]-encrypted, [zstandard][zstd]-compressed [JSON-RPC][jsonrpc] messages.
 
 When a TCP socket is opened, each side sends its 16-byte Peer ID to the other. All subsequent TCP messages are formatted like this:
 
@@ -154,7 +154,7 @@ When a TCP socket is opened, each side sends its 16-byte Peer ID to the other. A
     |
     Length (4 bytes, big-endian 32-bit int)
 
-If `Length` is negative, it signifies that the decrypted contents of `Message` are compressed. The length of `Message` is the absolute value of `Length`. `Message` is a sodium `box`, encrypted with the receiver's public key. Inside is a JSON-RPC message, which may be compressed with zstandard.
+If `Length` is negative, it signifies that the decrypted contents of `Message` are compressed. The length of `Message` is the absolute value of `Length`. `Message` is encrypted using Monocypher's AEAD and a shared key computed from one peer's private key and the other's public key. Inside is a JSON-RPC message, which may be compressed with zstandard.
 
 Each Osmosis instance starts a TCP service, called the Gateway Service, on a random ephemeral port. This service receives pair requests and connection requests.
 
@@ -485,7 +485,7 @@ Osmosis is distributed under the [Blue Oak Model License][blue-oak]. It is a MIT
 [causal-tree]: http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.627.5286
 [crdt]: https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type
 [chronofold]: https://arxiv.org/abs/2002.09511
-[sodium]: https://libsodium.gitbook.io/doc/
+[monocypher]: https://monocypher.org
 [zstd]: https://facebook.github.io/zstd/
 [jsonrpc]: https://www.jsonrpc.org/
 [protobuf]: https://developers.google.com/protocol-buffers

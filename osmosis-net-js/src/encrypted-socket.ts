@@ -1,11 +1,6 @@
 import { randomBytes } from 'crypto';
 import { Socket } from 'net';
-import {
-  crypto_box_easy,
-  crypto_box_MACBYTES,
-  crypto_box_NONCEBYTES,
-  crypto_box_open_easy,
-} from 'sodium-native';
+import * as Monocypher from 'monocypher-wasm';
 import { promisify } from 'util';
 import * as uuid from 'uuid';
 import { ZstdCodec } from 'zstd-codec';
@@ -68,6 +63,7 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
   private readonly privateKey: Buffer;
   private publicKey?: Buffer;
   private peerIdToPublicKey?: (uuid: string) => Buffer | undefined;
+  private sharedKey?: Uint8Array;
   private readonly maxMessageSize: number;
   private readonly sendCompressed: boolean;
   private readonly allowCompression: boolean;
@@ -79,7 +75,7 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
   private bufferPos = 0;
   private buffer = Buffer.alloc(UUID_LENGTH);
   private readonly firstSendPromise: Promise<void>;
-  private firstSendResolve: () => void;
+  private firstSendResolve: (arg?: any) => void;
   private lastSend: Promise<boolean> = Promise.resolve(false);
   protected closed = false;
   protected readonly log: Logger;
@@ -121,6 +117,7 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
       'EncryptedSocket received packet of %d bytes',
       data.byteLength
     );
+    await Monocypher.ready;
     const loadedZstd = await zstd;
     while (data.byteLength > this.bufferLength) {
       this.buffer.set(data.subarray(0, this.bufferLength), this.bufferPos);
@@ -155,6 +152,19 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
             this.close();
           }
         }
+        if (this.publicKey) {
+          this.sharedKey = Monocypher.crypto_key_exchange(
+            this.privateKey,
+            this.publicKey
+          );
+          this.log.trace(
+            {
+              publicKey: this.publicKey.toString('hex'),
+              sharedKey: Buffer.from(this.sharedKey).toString('hex'),
+            },
+            'key exchange complete'
+          );
+        }
         this.firstSendResolve();
         break;
       }
@@ -186,7 +196,7 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
           return;
         }
         this.bufferMode = BufferMode.NONCE;
-        this.bufferLength = crypto_box_NONCEBYTES;
+        this.bufferLength = Monocypher.NONCE_BYTES;
         break;
       case BufferMode.NONCE:
         this.nonce = this.buffer;
@@ -196,9 +206,6 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
       case BufferMode.CONTENT: {
         this.bufferMode = BufferMode.LENGTH;
         this.bufferLength = LENGTH_BYTES;
-        const decrypted = Buffer.alloc(
-          this.buffer.byteLength - crypto_box_MACBYTES
-        );
         this.log.trace(
           {
             length: this.buffer.byteLength,
@@ -206,19 +213,16 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
           },
           'EncryptedSocket got message content'
         );
-        try {
-          crypto_box_open_easy(
-            decrypted,
-            this.buffer,
-            this.nonce,
-            this.publicKey as Buffer,
-            this.privateKey
-          );
-        } catch (err) {
-          this.onBadMessage('encryption', err);
+        const decrypted = Monocypher.crypto_unlock(
+          this.sharedKey as Uint8Array,
+          this.nonce,
+          this.buffer
+        );
+        if (!decrypted) {
+          this.onBadMessage('encryption', new Error('decryption failed'));
           break;
         }
-        let decompressed = decrypted;
+        let decompressed = Buffer.from(decrypted);
         if (this.contentCompressed) {
           try {
             decompressed = Buffer.from(zstd.decompress(decrypted));
@@ -255,7 +259,7 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
     await this.firstSendPromise;
     if (
       this.closed ||
-      !this.publicKey ||
+      !this.sharedKey ||
       message.byteLength > this.maxMessageSize
     ) {
       this.log.trace(
@@ -273,26 +277,21 @@ class EncryptedSocket extends TypedEventEmitter<EncryptedSocketEvents> {
         const compressed = Buffer.from(
           shouldCompress ? (await zstd).compress(message) : message
         );
-        const nonce = randomBytes(crypto_box_NONCEBYTES);
-        const encrypted = Buffer.alloc(
-          compressed.byteLength + crypto_box_MACBYTES
-        );
-        crypto_box_easy(
-          encrypted,
-          compressed,
+        const nonce = randomBytes(Monocypher.NONCE_BYTES);
+        const encrypted = Monocypher.crypto_lock(
+          this.sharedKey as Uint8Array,
           nonce,
-          this.publicKey as Buffer,
-          this.privateKey
+          compressed
         );
         const prefixed = Buffer.alloc(
-          LENGTH_BYTES + crypto_box_NONCEBYTES + encrypted.byteLength
+          LENGTH_BYTES + Monocypher.NONCE_BYTES + encrypted.byteLength
         );
         prefixed.writeInt32BE(
           shouldCompress ? -encrypted.byteLength : encrypted.byteLength,
           0
         );
         prefixed.set(nonce, LENGTH_BYTES);
-        prefixed.set(encrypted, LENGTH_BYTES + crypto_box_NONCEBYTES);
+        prefixed.set(encrypted, LENGTH_BYTES + Monocypher.NONCE_BYTES);
         await lastSend;
         this.log.trace(
           { length: encrypted.byteLength },

@@ -1,11 +1,7 @@
 import assert from 'assert';
 import { hostname } from 'os';
-import {
-  crypto_box_keypair,
-  crypto_box_PUBLICKEYBYTES,
-  crypto_box_SECRETKEYBYTES,
-  sodium_malloc,
-} from 'sodium-native';
+import * as Monocypher from 'monocypher-wasm';
+import { randomBytes } from 'crypto';
 import * as uuid from 'uuid';
 
 export const MAX_PEER_NAME_LENGTH = 64;
@@ -22,14 +18,16 @@ export interface PeerConfig extends PeerInfo {
   readonly pairedPeers: PeerInfo[];
 }
 
-export function generateConfig(
+export async function generateConfig(
   appId: string = uuid.v4(),
   peerName: string = hostname()
-): PeerConfig {
+): Promise<PeerConfig> {
   assert(uuid.validate(appId), 'appId must be a UUID');
-  const publicKey = sodium_malloc(crypto_box_PUBLICKEYBYTES);
-  const privateKey = sodium_malloc(crypto_box_SECRETKEYBYTES);
-  crypto_box_keypair(publicKey, privateKey);
+  await Monocypher.ready;
+  const privateKey = randomBytes(Monocypher.KEY_BYTES);
+  const publicKey = Buffer.from(
+    Monocypher.crypto_key_exchange_public_key(privateKey)
+  );
   return {
     appId,
     peerId: uuid.v4(),

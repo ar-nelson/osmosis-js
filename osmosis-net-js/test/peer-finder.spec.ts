@@ -22,51 +22,53 @@ describe('PeerFinder', function () {
     helper.startAsyncTest(done);
     let gotHb1 = false;
     let gotHb2 = false;
-    const config1 = generateConfig(appId, 'Test Peer 1');
-    const config2 = generateConfig(appId, 'Test Peer 2');
-    pf1 = new PeerFinder(
-      config1,
-      port1,
-      () => undefined,
-      helper.log.child({ peer: 1 })
-    );
-    pf1.on('heartbeat', ({ heartbeat }) => {
-      expect(uuid.stringify(heartbeat.getAppid_asU8())).to.equal(appId);
-      expect(uuid.stringify(heartbeat.getPeerid_asU8())).to.equal(
-        config2.peerId
-      );
-      expect(heartbeat.getPeername()).to.equal('Test Peer 2');
-      expect(heartbeat.getPort()).to.equal(port2);
-      expect(heartbeat.getPublickey_asB64()).to.equal(
-        config2.publicKey.toString('base64')
-      );
-      gotHb2 = true;
-      if (gotHb1) {
-        done();
-      }
-    });
-    setTimeout(() => {
-      pf2 = new PeerFinder(
-        config2,
-        port2,
+    (async () => {
+      const config1 = await generateConfig(appId, 'Test Peer 1');
+      const config2 = await generateConfig(appId, 'Test Peer 2');
+      pf1 = new PeerFinder(
+        config1,
+        port1,
         () => undefined,
-        helper.log.child({ peer: 2 })
+        helper.log.child({ peer: 1 })
       );
-      pf2.on('heartbeat', ({ heartbeat }) => {
+      pf1.on('heartbeat', ({ heartbeat }) => {
         expect(uuid.stringify(heartbeat.getAppid_asU8())).to.equal(appId);
         expect(uuid.stringify(heartbeat.getPeerid_asU8())).to.equal(
-          config1.peerId
+          config2.peerId
         );
-        expect(heartbeat.getPeername()).to.equal('Test Peer 1');
-        expect(heartbeat.getPort()).to.equal(port1);
+        expect(heartbeat.getPeername()).to.equal('Test Peer 2');
+        expect(heartbeat.getPort()).to.equal(port2);
         expect(heartbeat.getPublickey_asB64()).to.equal(
-          config1.publicKey.toString('base64')
+          config2.publicKey.toString('base64')
         );
-        gotHb1 = true;
-        if (gotHb2) {
+        gotHb2 = true;
+        if (gotHb1) {
           done();
         }
       });
-    }, 500);
+      setTimeout(() => {
+        pf2 = new PeerFinder(
+          config2,
+          port2,
+          () => undefined,
+          helper.log.child({ peer: 2 })
+        );
+        pf2.on('heartbeat', ({ heartbeat }) => {
+          expect(uuid.stringify(heartbeat.getAppid_asU8())).to.equal(appId);
+          expect(uuid.stringify(heartbeat.getPeerid_asU8())).to.equal(
+            config1.peerId
+          );
+          expect(heartbeat.getPeername()).to.equal('Test Peer 1');
+          expect(heartbeat.getPort()).to.equal(port1);
+          expect(heartbeat.getPublickey_asB64()).to.equal(
+            config1.publicKey.toString('base64')
+          );
+          gotHb1 = true;
+          if (gotHb2) {
+            done();
+          }
+        });
+      }, 500);
+    })();
   });
 });

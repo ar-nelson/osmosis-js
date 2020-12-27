@@ -1,7 +1,7 @@
 import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import Chance from 'chance';
-import { describe, it } from 'mocha';
+import { before, describe, it } from 'mocha';
 import { Socket } from 'net';
 import EncryptedSocket from '../src/encrypted-socket';
 import SocketTestHelper from './socket-test-helper';
@@ -14,12 +14,7 @@ describe('EncryptedSocket', function () {
   const chance = new Chance();
   const serverId = 'ecdb8ebf-e896-45e9-8bf9-1cf99db583b0';
   const clientId = '1cca2959-e698-4bf2-853b-2957a51a86cc';
-  const {
-    serverPublicKey,
-    serverPrivateKey,
-    clientPublicKey,
-    clientPrivateKey,
-  } = helper.generateKeys();
+  let serverPublicKey, serverPrivateKey, clientPublicKey, clientPrivateKey;
 
   function longMessage() {
     const message = {};
@@ -44,6 +39,14 @@ describe('EncryptedSocket', function () {
     return JSON.stringify(message);
   }
 
+  before(async function () {
+    const keys = await helper.generateKeys();
+    serverPrivateKey = keys.serverPrivateKey;
+    serverPublicKey = keys.serverPublicKey;
+    clientPrivateKey = keys.clientPrivateKey;
+    clientPublicKey = keys.clientPublicKey;
+  });
+
   it('should send a short message from client to server', function (done) {
     helper.startAsyncTest(done);
     const message = 'The rain in Spain stays mainly on the plain';
@@ -55,10 +58,7 @@ describe('EncryptedSocket', function () {
         publicKey: clientPublicKey,
         logger: helper.log.child({ side: 'server' }),
       });
-      socket.on('badMessage', (err) => {
-        console.error(err);
-        expect.fail('badMessage');
-      });
+      socket.on('badMessage', done);
       socket.on('message', (newMessage) => {
         expect(newMessage.toString('utf8')).to.equal(message);
         done();
@@ -100,10 +100,7 @@ describe('EncryptedSocket', function () {
         publicKey: serverPublicKey,
         logger: helper.log.child({ side: 'client' }),
       });
-      socket.on('badMessage', (err) => {
-        console.error(err);
-        expect.fail('badMessage');
-      });
+      socket.on('badMessage', done);
       socket.on('message', (newMessage) => {
         expect(newMessage.toString('utf8')).to.equal(message);
         done();
@@ -123,10 +120,7 @@ describe('EncryptedSocket', function () {
         publicKey: clientPublicKey,
         logger: helper.log.child({ side: 'server' }),
       });
-      socket.on('badMessage', (err) => {
-        console.error(err);
-        expect.fail('badMessage');
-      });
+      socket.on('badMessage', done);
       socket.on('message', (newMessage) => {
         expect(newMessage.toString('utf8')).to.equal(message);
         done();
@@ -175,10 +169,7 @@ describe('EncryptedSocket', function () {
         .true;
       expect(socket.send(Buffer.from(toClient[2], 'utf8'))).to.eventually.be
         .true;
-      socket.on('badMessage', (err) => {
-        console.error(err);
-        expect.fail('badMessage');
-      });
+      socket.on('badMessage', done);
       socket.on('message', (newMessage) => {
         expect(serverRecvd).to.be.lessThan(toServer.length);
         expect(newMessage.toString('utf8')).to.equal(toServer[serverRecvd]);
@@ -199,10 +190,7 @@ describe('EncryptedSocket', function () {
         publicKey: serverPublicKey,
         logger: helper.log.child({ side: 'client' }),
       });
-      socket.on('badMessage', (err) => {
-        console.error(err);
-        expect.fail('badMessage');
-      });
+      socket.on('badMessage', done);
       socket.on('message', (newMessage) => {
         expect(clientRecvd).to.be.lessThan(toClient.length);
         expect(newMessage.toString('utf8')).to.equal(toClient[clientRecvd]);

@@ -1,10 +1,7 @@
 import { afterEach, beforeEach } from 'mocha';
 import { Server, Socket } from 'net';
-import {
-  crypto_box_keypair,
-  crypto_box_PUBLICKEYBYTES,
-  crypto_box_SECRETKEYBYTES,
-} from 'sodium-native';
+import * as Monocypher from 'monocypher-wasm';
+import { randomBytes } from 'crypto';
 import Logger from 'bunyan';
 
 export default class SocketTestHelper {
@@ -13,6 +10,7 @@ export default class SocketTestHelper {
   private done: (err?: any) => void;
   public log = Logger.createLogger({
     name: 'test',
+    serializers: { err: Logger.stdSerializers.err },
     streams: [{ path: `${__dirname}/../test.log`, level: 'trace' }],
   });
 
@@ -23,9 +21,18 @@ export default class SocketTestHelper {
       done(err);
     };
 
+    const onUnexpectedExit = (code: number) => {
+      const err = new Error(
+        `unexpected exit(${code}) in the middle of test, probably emscripten weirdness`
+      );
+      console.error(err);
+      this.done(err);
+    };
+
     beforeEach(() => {
       this.log.info('=== BEGIN TEST ===');
       process.on('unhandledRejection', onUnhandled);
+      process.on('exit', onUnexpectedExit);
     });
 
     afterEach(() => {
@@ -40,23 +47,27 @@ export default class SocketTestHelper {
       this.servers.clear();
       this.sockets.clear();
       process.off('unhandledRejection', onUnhandled);
+      process.off('exit', onUnexpectedExit);
       this.done = () => null;
       this.log.info('=== END TEST ===');
     });
   }
 
-  generateKeys(): {
+  async generateKeys(): Promise<{
     serverPublicKey: Buffer;
     serverPrivateKey: Buffer;
     clientPublicKey: Buffer;
     clientPrivateKey: Buffer;
-  } {
-    const serverPublicKey = Buffer.alloc(crypto_box_PUBLICKEYBYTES);
-    const serverPrivateKey = Buffer.alloc(crypto_box_SECRETKEYBYTES);
-    const clientPublicKey = Buffer.alloc(crypto_box_PUBLICKEYBYTES);
-    const clientPrivateKey = Buffer.alloc(crypto_box_SECRETKEYBYTES);
-    crypto_box_keypair(serverPublicKey, serverPrivateKey);
-    crypto_box_keypair(clientPublicKey, clientPrivateKey);
+  }> {
+    await Monocypher.ready;
+    const serverPrivateKey = randomBytes(Monocypher.KEY_BYTES);
+    const serverPublicKey = Buffer.from(
+      Monocypher.crypto_key_exchange_public_key(serverPrivateKey)
+    );
+    const clientPrivateKey = randomBytes(Monocypher.KEY_BYTES);
+    const clientPublicKey = Buffer.from(
+      Monocypher.crypto_key_exchange_public_key(clientPrivateKey)
+    );
     return {
       serverPublicKey,
       serverPrivateKey,

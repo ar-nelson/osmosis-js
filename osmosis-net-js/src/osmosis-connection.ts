@@ -4,18 +4,13 @@ import getPort from 'get-port';
 import * as uuid from 'uuid';
 import { PeerConfig } from './peer-config';
 import PeerFinder, { HEARTBEAT_DELAY } from './peer-finder';
+import * as Monocypher from 'monocypher-wasm';
 import {
   RpcServer,
   RpcSocket,
   RpcMetadata,
   MethodHandlers,
 } from './rpc-sockets';
-import {
-  crypto_box_keypair,
-  crypto_box_PUBLICKEYBYTES,
-  crypto_box_SECRETKEYBYTES,
-  sodium_malloc,
-} from 'sodium-native';
 import * as proto from './osmosis_pb';
 import { randomBytes } from 'crypto';
 import assert from 'assert';
@@ -339,6 +334,7 @@ class OsmosisConnection<
     params: ConnectRequest,
     { remotePeerId, remoteAddress }: RpcMetadata
   ): Promise<ConnectResponse> {
+    await Monocypher.ready;
     const visible = this.visiblePeers.get(remotePeerId);
     if (!visible) {
       this.log.warn(
@@ -365,9 +361,10 @@ class OsmosisConnection<
     }
     this.log.info({ remotePeerId, remoteAddress }, 'Got connection request');
     const remotePublicKey = Buffer.from(params.publicKey, 'base64');
-    const localPublicKey = sodium_malloc(crypto_box_PUBLICKEYBYTES);
-    const localPrivateKey = sodium_malloc(crypto_box_SECRETKEYBYTES);
-    crypto_box_keypair(localPublicKey, localPrivateKey);
+    const localPrivateKey = randomBytes(Monocypher.KEY_BYTES);
+    const localPublicKey = Buffer.from(
+      Monocypher.crypto_key_exchange_public_key(localPrivateKey)
+    );
     const port = await getPort();
     const server = new RpcServer<ConnectionMethods & Methods>({
       port,
@@ -558,6 +555,7 @@ class OsmosisConnection<
   }
 
   private async connectPeer(peer: VisiblePeer): Promise<void> {
+    await Monocypher.ready;
     this.log.info(
       {
         peerId: peer.peerId,
@@ -567,9 +565,10 @@ class OsmosisConnection<
       'Sending connection request'
     );
 
-    const localPublicKey = sodium_malloc(crypto_box_PUBLICKEYBYTES);
-    const localPrivateKey = sodium_malloc(crypto_box_SECRETKEYBYTES);
-    crypto_box_keypair(localPublicKey, localPrivateKey);
+    const localPrivateKey = randomBytes(Monocypher.KEY_BYTES);
+    const localPublicKey = Buffer.from(
+      Monocypher.crypto_key_exchange_public_key(localPrivateKey)
+    );
 
     assert(this.gatewayServer != null);
     const gatewaySocket = await this.gatewayServer.connect(

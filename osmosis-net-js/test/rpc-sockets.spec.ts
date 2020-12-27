@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { afterEach, describe, it } from 'mocha';
+import { before, afterEach, describe, it } from 'mocha';
 import { RpcServer, RpcServerConfig, MethodHandlers } from '../src/rpc-sockets';
 import SocketTestHelper from './socket-test-helper';
 
@@ -9,12 +9,7 @@ describe('JSON-RPC Socket', function () {
   const clientId = '1cca2959-e698-4bf2-853b-2957a51a86cc';
   const serverPort = 10001;
   const clientPort = 10002;
-  const {
-    serverPublicKey,
-    serverPrivateKey,
-    clientPublicKey,
-    clientPrivateKey,
-  } = helper.generateKeys();
+  let serverPublicKey, serverPrivateKey, clientPublicKey, clientPrivateKey;
 
   const servers = new Set<RpcServer<any>>();
   const serverLog = helper.log.child({ side: 'server' });
@@ -62,6 +57,14 @@ describe('JSON-RPC Socket', function () {
     });
     return { client, server };
   }
+
+  before(async function () {
+    const keys = await helper.generateKeys();
+    serverPrivateKey = keys.serverPrivateKey;
+    serverPublicKey = keys.serverPublicKey;
+    clientPrivateKey = keys.clientPrivateKey;
+    clientPublicKey = keys.clientPublicKey;
+  });
 
   afterEach(function () {
     servers.forEach((s) => s.close());

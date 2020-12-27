@@ -17,7 +17,7 @@
     "bunyan": "^1.8.14",
     "get-port": "^5.1.1",
     "lodash.isplainobject": "^4.0.6",
-    "sodium-native": "^3.2.0",
+    "monocypher-wasm": "^3.1.2-2",
     "uuid": "^8.3.1",
     "zstd-codec": "^0.1.2"
   },
@@ -34,7 +34,6 @@
     "@types/lodash.isplainobject": "^4.0.6",
     "@types/mocha": "^8.2.0",
     "@types/node": "^14.14.10",
-    "@types/sodium-native": "^2.3.5",
     "@types/uuid": "^8.3.0",
     "@typescript-eslint/eslint-plugin": "^4.9.0",
     "@typescript-eslint/parser": "^4.9.0",
