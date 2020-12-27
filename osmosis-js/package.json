@@ -1,30 +1,26 @@
 {
-  "name": "@nels.onl/osmosis-net-js",
+  "name": "@nels.onl/osmosis-js",
   "version": "0.1.0",
-  "description": "Osmosis network stack: UDP peer discovery and encrypted JSON-RPC",
+  "description": "JS reference implementation of Osmosis, a JSON data store with peer-to-peer background sync",
   "main": "dist/index.js",
   "author": "Adam Nelson <adam@nels.onl>",
   "license": "BlueOak-1.0.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/ar-nelson/osmosis-js.git",
-    "directory": "osmosis-net-js"
+    "directory": "osmosis-js"
   },
   "scripts": {
-    "build.proto": "./build-proto.sh",
     "build": "tsc && babel src --out-dir dist --extensions .ts && cp -f src/*.js dist/",
-    "clean": "rm -rf dist build",
+    "clean": "rm -rf dist",
     "lint": "eslint --ext ts src",
-    "test": "rm -f test.log; mocha || bunyan --no-pager -o short test.log"
+    "test": "mocha"
   },
   "dependencies": {
-    "broadcast-interfaces": "^1.0.0",
+    "@nels.onl/osmosis-net-js": "../osmosis-net-js",
+    "@nels.onl/osmosis-store-js": "../osmosis-store-js",
     "bunyan": "^1.8.14",
-    "get-port": "^5.1.1",
-    "lodash.isplainobject": "^4.0.6",
-    "monocypher-wasm": "^3.1.2-3",
-    "uuid": "^8.3.1",
-    "zstd-codec": "^0.1.2"
+    "uuid": "^8.3.1"
   },
   "devDependencies": {
     "@babel/cli": "^7.12.8",
@@ -36,7 +32,6 @@
     "@types/chai": "^4.2.14",
     "@types/chai-as-promised": "^7.1.3",
     "@types/chance": "^1.1.1",
-    "@types/lodash.isplainobject": "^4.0.6",
     "@types/mocha": "^8.2.0",
     "@types/node": "^14.14.10",
     "@types/uuid": "^8.3.0",
@@ -49,7 +44,6 @@
     "mocha": "^8.2.1",
     "prettier": "^2.2.1",
     "prettier-plugin-organize-imports": "^1.1.1",
-    "ts-protoc-gen": "^0.13.0",
     "typescript": "^4.1.2"
   }
 }

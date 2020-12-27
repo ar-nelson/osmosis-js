@@ -2514,10 +2514,10 @@ moment@^2.19.3:
   resolved "https://registry.yarnpkg.com/moment/-/moment-2.29.1.tgz#b2be769fa31940be9eeea6469c075e35006fa3d3"
   integrity sha512-kHmoybcPV8Sqy59DwNDY3Jefr64lK/by/da0ViFcuA4DH0vQg5Q6Ze5VimxkfQNSC+Mls/Kx53s7TjP1RhFEDQ==
 
-monocypher-wasm@^3.1.2-2:
-  version "3.1.2-2"
-  resolved "https://registry.yarnpkg.com/monocypher-wasm/-/monocypher-wasm-3.1.2-2.tgz#1781a69dfe89180802e18128013cd14b29d26291"
-  integrity sha512-J0T79O3psrgRYasWD2NRsEeXx+mafkbJYW+u1xjaTqbeJQRW1bS3Rzn71FS1HW/S1Jlsz2LXChTaEMhqgA4+Mw==
+monocypher-wasm@^3.1.2-3:
+  version "3.1.2-3"
+  resolved "https://registry.yarnpkg.com/monocypher-wasm/-/monocypher-wasm-3.1.2-3.tgz#35175234f233f60a84f78867c9a487a392ae0a33"
+  integrity sha512-ff8EuymCnjg0hHKkgFF6EsbcXW1iNjTgPMNv2mbT5NX5Wm7/uEDHFD4b7uQqnVlzFAtn/d4zrROPxUbrckizSA==
 
 ms@2.0.0:
   version "2.0.0"
