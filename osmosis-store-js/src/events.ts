@@ -1,4 +1,5 @@
-import { Failure, Uuid } from './types';
+import { Uuid } from './id';
+import { Failure } from './types';
 
 export interface MergeFailureEvent {
   event: 'MergeFailure';

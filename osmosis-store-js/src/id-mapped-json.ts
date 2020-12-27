@@ -3,22 +3,16 @@ import flatMap from 'lodash.flatmap';
 import isPlainObject from 'lodash.isplainobject';
 import last from 'lodash.last';
 import {
-  applyAction,
   Action,
+  applyAction,
   mapAction,
   mapActionToList,
   ScalarAction,
 } from './actions';
+import { Id, idToString } from './id';
 import * as JsonPath from './jsonpath';
 import { CompiledJsonIdPath, CompiledJsonPath } from './jsonpath';
-import {
-  Failure,
-  Json,
-  JsonObject,
-  PathArray,
-  Timestamp,
-  timestampToString,
-} from './types';
+import { Failure, Json, JsonObject, PathArray } from './types';
 
 export interface IdMappedJson {
   readonly root: JsonObject;
@@ -27,7 +21,7 @@ export interface IdMappedJson {
 }
 
 export interface PathToIdTree {
-  readonly ids: readonly Timestamp[];
+  readonly ids: readonly Id[];
   readonly subtree?: PathToIdSubtree;
 }
 
@@ -68,7 +62,7 @@ function moveTree(
 
   function moveSubtree(tree: Draft<PathToIdTree>, subpath: PathArray) {
     const path = [...to, ...subpath] as Draft<PathArray>;
-    tree.ids.forEach((id) => (idToPath[timestampToString(id)] = path));
+    tree.ids.forEach((id) => (idToPath[idToString(id)] = path));
     if (Array.isArray(tree.subtree)) {
       tree.subtree.forEach((t, i) => moveSubtree(t, [...subpath, i]));
     } else if (isPlainObject(tree.subtree)) {
@@ -82,7 +76,7 @@ function moveTree(
 }
 
 export function applyIdMappedAction(
-  action: ScalarAction<{ id?: Timestamp; path: PathArray }>,
+  action: ScalarAction<{ id?: Id; path: PathArray }>,
   { root, idToPath, pathToId }: Draft<IdMappedJson>
 ):
   | {
@@ -109,10 +103,10 @@ export function applyIdMappedAction(
         const [path] = result.changed;
         const tree = followPath(path, pathToId);
         for (const id of tree.ids) {
-          delete idToPath[timestampToString(id)];
+          delete idToPath[idToString(id)];
         }
         tree.ids = [id];
-        idToPath[timestampToString(id)] = path as Draft<PathArray>;
+        idToPath[idToString(id)] = path as Draft<PathArray>;
       }
       break;
     }
@@ -120,7 +114,7 @@ export function applyIdMappedAction(
       if (result.changed.length) {
         const tree = followPath(path, pathToId);
         for (const id of tree.ids) {
-          delete idToPath[timestampToString(id)];
+          delete idToPath[idToString(id)];
         }
         tree.ids = [];
         if (typeof last(path) === 'number') {
@@ -143,7 +137,7 @@ export function applyIdMappedAction(
       } else {
         followPath(path, pathToId).ids.push(id);
       }
-      idToPath[timestampToString(id)] = path as Draft<PathArray>;
+      idToPath[idToString(id)] = path as Draft<PathArray>;
       break;
     case 'Move':
       if (result.changed.length) {
@@ -163,7 +157,7 @@ export function applyIdMappedAction(
           );
         });
         followPath([...parentPath, indexes[0]], pathToId).ids = [id];
-        idToPath[timestampToString(id)] = [...parentPath, indexes[0]];
+        idToPath[idToString(id)] = [...parentPath, indexes[0]];
       }
   }
   return result;
@@ -172,9 +166,9 @@ export function applyIdMappedAction(
 export function splitIntoActionsWithDirectPaths(
   action: Action<CompiledJsonPath | CompiledJsonIdPath>,
   json: IdMappedJson,
-  id?: Timestamp
+  id?: Id
 ): {
-  actions: Action<{ id?: Timestamp; path: PathArray }>[];
+  actions: Action<{ id?: Id; path: PathArray }>[];
   failures: Failure[];
 } {
   if (action.action === 'Transaction') {
@@ -301,7 +295,7 @@ export function queryPaths(
   }
   const [first, ...rest] = path as CompiledJsonIdPath;
   if (first.type === 'Id') {
-    const idPath = idToPath[timestampToString(first.query.id)];
+    const idPath = idToPath[idToString(first.query.id)];
     if (idPath) {
       const subroot = idPath.reduce((j, i) => j?.[i], root);
       if (subroot) {
@@ -336,7 +330,7 @@ export function queryValues(
   }
   const [first, ...rest] = path as CompiledJsonIdPath;
   if (first.type === 'Id') {
-    const idPath = idToPath[timestampToString(first.query.id)];
+    const idPath = idToPath[idToString(first.query.id)];
     if (idPath) {
       const subroot = idPath.reduce((j, i) => j?.[i], root);
       if (subroot) {
@@ -359,7 +353,7 @@ export function anchorPathToId(
   path: CompiledJsonPath
 ): CompiledJsonPath | CompiledJsonIdPath {
   let lastIdIndex = -1;
-  let lastId: Timestamp | undefined;
+  let lastId: Id | undefined;
   let tree = pathToId;
   const queryPath: (string | number)[] = [];
   for (let i = 0; i < path.length; i++) {

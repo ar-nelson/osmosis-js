@@ -1,8 +1,8 @@
 import { readFileSync, statSync, writeFile } from 'fs';
 import produce, { Draft } from 'immer';
 import * as uuid from 'uuid';
-import { Op, SavePoint, SaveState, timestampIndex } from './store';
-import { Timestamp, Uuid } from './types';
+import { Id, idIndex, Uuid } from './id';
+import { Op, SavePoint, SaveState } from './store';
 
 enum WriteState {
   Idle,
@@ -85,9 +85,9 @@ export default class JsonFileSaveState implements SaveState {
     this.scheduleWrite();
   }
 
-  deleteSavePoint(at: Timestamp): void {
+  deleteSavePoint(at: Id): void {
     this.saveFile = produce(this.saveFile, ({ savePoints }) => {
-      const i = timestampIndex(at, savePoints);
+      const i = idIndex(at, savePoints);
       if (i > 0) {
         savePoints.splice(i, 1);
       }
@@ -95,11 +95,11 @@ export default class JsonFileSaveState implements SaveState {
     this.scheduleWrite();
   }
 
-  deleteEverythingAfter(exclusiveLowerBound: Timestamp): void {
+  deleteEverythingAfter(exclusiveLowerBound: Id): void {
     this.saveFile = produce(this.saveFile, ({ savePoints, ops }) => {
-      const i = timestampIndex(exclusiveLowerBound, savePoints);
+      const i = idIndex(exclusiveLowerBound, savePoints);
       savePoints.splice(i, savePoints.length - i);
-      const j = timestampIndex(exclusiveLowerBound, ops);
+      const j = idIndex(exclusiveLowerBound, ops);
       ops.splice(j, ops.length - j);
     });
     this.scheduleWrite();

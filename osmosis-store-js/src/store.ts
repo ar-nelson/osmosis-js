@@ -1,10 +1,9 @@
 import produce, { Draft } from 'immer';
 import flatMap from 'lodash.flatmap';
 import last from 'lodash.last';
-import sortedIndexBy from 'lodash.sortedindexby';
-import * as uuid from 'uuid';
 import { Action, mapActionToList } from './actions';
 import Dispatchable from './dispatchable';
+import { CausalTree, Id, idIndex, idToString, Uuid, ZERO_ID } from './id';
 import {
   anchorPathToId,
   applyIdMappedAction,
@@ -29,21 +28,12 @@ import {
   Json,
   OsmosisFailureError,
   PathArray,
-  Timestamp,
-  timestampToString,
-  Uuid,
 } from './types';
-
-export const ZERO_TIMESTAMP: Timestamp = { author: uuid.NIL, index: 0 };
-
-export interface CausalTree {
-  readonly timestamp: Timestamp;
-}
 
 export type Op = CausalTree & Action<CompiledJsonPath | CompiledJsonIdPath>;
 
 export interface SavePoint extends IdMappedJson {
-  readonly timestamp: Timestamp;
+  readonly id: Id;
   readonly width: number;
 }
 
@@ -65,24 +55,6 @@ enum SaveChanges {
 
 const MIN_SAVE_POINT_SIZE = 4;
 
-export function timestampIndex(
-  timestamp: Timestamp,
-  ops: readonly { timestamp: Timestamp }[],
-  expectMatch = false
-): number {
-  const i = sortedIndexBy(ops, { timestamp }, (x) =>
-    timestampToString(x.timestamp)
-  );
-  if (
-    !expectMatch ||
-    (ops[i]?.timestamp?.author === timestamp.author &&
-      ops[i]?.timestamp?.index === timestamp.index)
-  ) {
-    return i;
-  }
-  return -1;
-}
-
 export class Store implements Dispatchable<JsonPathAction>, Queryable {
   private state: State;
   private readonly uuid: Uuid;
@@ -97,7 +69,7 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
         root: {},
         idToPath: {},
         pathToId: { ids: [] },
-        timestamp: ZERO_TIMESTAMP,
+        id: ZERO_ID,
         width: MIN_SAVE_POINT_SIZE,
       };
       savePoints = [firstSavePoint];
@@ -106,7 +78,7 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
     const savePoint = last(savePoints) as SavePoint;
     this.uuid = uuid;
     this.state = ops
-      .slice(timestampIndex(savePoint.timestamp, ops, true))
+      .slice(idIndex(savePoint.id, ops, true))
       .reduce((state, op) => this.applyOp(op, SaveChanges.Never, state).state, {
         root: savePoint.root,
         idToPath: savePoint.idToPath,
@@ -131,10 +103,10 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
         )
     );
     const ops: Op[] = processedActions.map((action) => {
-      const timestamp: Timestamp = { author: this.uuid, index: this.nextIndex };
+      const id: Id = { author: this.uuid, index: this.nextIndex };
       this.nextIndex +=
         action.action === 'Transaction' ? action.payload.length : 1;
-      return { ...action, timestamp };
+      return { ...action, id };
     });
     const failures = flatMap(ops, (op) => {
       const { state, changed, failures } = this.applyOp(
@@ -164,16 +136,16 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
     let earliestInsertionIndex = this.state.ops.length;
     const { ops: opsWithInsertions } = produce(this.state, (state) => {
       (ops as Draft<Op>[]).forEach((op) => {
-        if (timestampIndex(op.timestamp, this.state.ops, true) >= 0) {
+        if (idIndex(op.id, this.state.ops, true) >= 0) {
           return;
         }
-        const index = timestampIndex(op.timestamp, state.ops);
+        const index = idIndex(op.id, state.ops);
         state.ops.splice(index, 0, op);
         earliestInsertionIndex = Math.min(earliestInsertionIndex, index);
       });
     });
-    const earliestInsertionTimestamp = timestampToString(
-      opsWithInsertions[earliestInsertionIndex].timestamp
+    const earliestInsertionTimestamp = idToString(
+      opsWithInsertions[earliestInsertionIndex].id
     );
 
     let opIndexOfLastSavePoint = -1;
@@ -181,10 +153,7 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
       let indexOfLastSavePoint = -1;
       let lastSavePoint: Draft<SavePoint> | undefined;
       for (let i = state.savePoints.length - 1; i >= 0; i--) {
-        if (
-          timestampToString(state.savePoints[i].timestamp) <=
-          earliestInsertionTimestamp
-        ) {
+        if (idToString(state.savePoints[i].id) <= earliestInsertionTimestamp) {
           lastSavePoint = state.savePoints[i];
           indexOfLastSavePoint = i;
           break;
@@ -195,16 +164,13 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
           `FATAL: No save point before ${earliestInsertionTimestamp}. Cannot apply new ops.`
         );
       }
-      opIndexOfLastSavePoint = timestampIndex(
-        lastSavePoint.timestamp,
-        state.ops
-      );
+      opIndexOfLastSavePoint = idIndex(lastSavePoint.id, state.ops);
       state.root = lastSavePoint.root;
       state.idToPath = lastSavePoint.idToPath;
       state.pathToId = lastSavePoint.pathToId;
       state.savePoints = state.savePoints.slice(0, indexOfLastSavePoint);
       state.ops = state.ops.slice(0, opIndexOfLastSavePoint);
-      this.saveState.deleteEverythingAfter(lastSavePoint.timestamp);
+      this.saveState.deleteEverythingAfter(lastSavePoint.id);
     });
 
     const totalChanged: PathArray[] = [];
@@ -234,7 +200,7 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
     const {
       actions,
       failures: totalFailures,
-    } = splitIntoActionsWithDirectPaths(op, state, op.timestamp);
+    } = splitIntoActionsWithDirectPaths(op, state, op.id);
     let totalChanged: PathArray[] = [];
     const directActions = flatMap(actions, (a) =>
       a.action === 'Transaction' ? a.payload : [a]
@@ -279,25 +245,25 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
   }: Draft<State>): boolean {
     if (
       ops.length < MIN_SAVE_POINT_SIZE ||
-      timestampToString(ops[ops.length - MIN_SAVE_POINT_SIZE].timestamp) <=
-        timestampToString(last(savePoints)?.timestamp || ZERO_TIMESTAMP)
+      idToString(ops[ops.length - MIN_SAVE_POINT_SIZE].id) <=
+        idToString(last(savePoints)?.id || ZERO_ID)
     ) {
       return false;
     }
     for (let i = 2; i < savePoints.length; i++) {
       if (savePoints[i].width === savePoints[i - 2].width) {
-        this.saveState.deleteSavePoint(savePoints[i - 1].timestamp);
+        this.saveState.deleteSavePoint(savePoints[i - 1].id);
         savePoints[i - 2].width *= 2;
         savePoints.splice(i - 1, 1);
         break;
       }
     }
-    const timestamp = (last(ops) as Op).timestamp;
+    const id = (last(ops) as Op).id;
     savePoints.push({
       root,
       idToPath,
       pathToId,
-      timestamp,
+      id,
       width: MIN_SAVE_POINT_SIZE,
     });
     return true;
@@ -349,6 +315,6 @@ export interface SaveState {
   };
   addOp(op: Op): void;
   addSavePoint(savePoint: SavePoint): void;
-  deleteSavePoint(at: Timestamp): void;
-  deleteEverythingAfter(exclusiveLowerBound: Timestamp): void;
+  deleteSavePoint(at: Id): void;
+  deleteEverythingAfter(exclusiveLowerBound: Id): void;
 }

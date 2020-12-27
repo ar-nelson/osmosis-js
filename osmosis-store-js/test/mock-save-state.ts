@@ -1,6 +1,6 @@
 import produce, { Draft } from 'immer';
-import { Op, SavePoint, SaveState, timestampIndex } from '../src/store';
-import { Timestamp, Uuid } from '../src/types';
+import { Id, idIndex, Uuid } from '../src/id';
+import { Op, SavePoint, SaveState } from '../src/store';
 
 interface SaveFile {
   readonly uuid: Uuid;
@@ -23,30 +23,32 @@ export default class MockSaveState implements SaveState {
     return this.saveFile;
   }
 
-  addOp(op: Op) {
+  addOp(op: Op): void {
     this.saveFile = produce(this.saveFile, ({ ops }) => {
       ops.push(op as Draft<Op>);
     });
   }
 
-  addSavePoint(savePoint: SavePoint) {
+  addSavePoint(savePoint: SavePoint): void {
     this.saveFile = produce(this.saveFile, ({ savePoints }) => {
       savePoints.push(savePoint as Draft<SavePoint>);
     });
   }
 
-  deleteSavePoint(at: Timestamp) {
+  deleteSavePoint(at: Id): void {
     this.saveFile = produce(this.saveFile, ({ savePoints }) => {
-      const i = timestampIndex(at, savePoints);
-      if (i > 0) savePoints.splice(i, 1);
+      const i = idIndex(at, savePoints);
+      if (i > 0) {
+        savePoints.splice(i, 1);
+      }
     });
   }
 
-  deleteEverythingAfter(exclusiveLowerBound: Timestamp) {
+  deleteEverythingAfter(exclusiveLowerBound: Id): void {
     const newFile = produce(this.saveFile, ({ savePoints, ops }) => {
-      const i = timestampIndex(exclusiveLowerBound, savePoints);
+      const i = idIndex(exclusiveLowerBound, savePoints);
       savePoints.splice(i, savePoints.length);
-      const j = timestampIndex(exclusiveLowerBound, ops);
+      const j = idIndex(exclusiveLowerBound, ops);
       ops.splice(j, ops.length);
     });
     this.saveFile = newFile;

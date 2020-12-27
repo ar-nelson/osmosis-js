@@ -4,8 +4,9 @@ import isEqual from 'lodash.isequal';
 import isPlainObject from 'lodash.isplainobject';
 import nearley from 'nearley';
 import { Action, mapAction, ScalarAction } from './actions';
+import { Id } from './id';
 import grammar from './jsonpath.grammar';
-import { Failure, Json, JsonObject, PathArray, Timestamp } from './types';
+import { Failure, Json, JsonObject, PathArray } from './types';
 
 const isObject: (
   json: Draft<Json>
@@ -112,8 +113,8 @@ export interface RecursiveSegment {
 export interface IdSegment {
   readonly type: 'Id';
   readonly query: {
-    id: Timestamp;
-    path: PathArray;
+    readonly id: Id;
+    readonly path: PathArray;
   };
 }
 

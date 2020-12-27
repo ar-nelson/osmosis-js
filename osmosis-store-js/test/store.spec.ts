@@ -1,8 +1,9 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
 import { Action } from '../src/actions';
-import { Store, timestampIndex, ZERO_TIMESTAMP } from '../src/store';
-import { Json, timestampToString } from '../src/types';
+import { idIndex, idToString, ZERO_ID } from '../src/id';
+import { Store } from '../src/store';
+import { Json } from '../src/types';
 import MockSaveState from './mock-save-state';
 
 describe('Store', function () {
@@ -32,7 +33,7 @@ describe('Store', function () {
       action: 'Set',
       path: [{ type: 'Key', query: 'foo' }],
       payload: 1,
-      timestamp: { author: UUID1, index: 1 },
+      id: { author: UUID1, index: 1 },
     };
     expect(store.ops).to.deep.equal([op1]);
     expect(saveState.load().ops).to.deep.equal([op1]);
@@ -45,7 +46,7 @@ describe('Store', function () {
       action: 'Set',
       path: [{ type: 'Key', query: 'bar' }],
       payload: 2,
-      timestamp: { author: UUID1, index: 2 },
+      id: { author: UUID1, index: 2 },
     };
     expect(store.ops).to.deep.equal([op1, op2]);
     expect(saveState.load().ops).to.deep.equal([op1, op2]);
@@ -63,7 +64,7 @@ describe('Store', function () {
       root: {},
       idToPath: {},
       pathToId: { ids: [] },
-      timestamp: ZERO_TIMESTAMP,
+      id: ZERO_ID,
       width: 4,
     };
     expect(store.savePoints).to.deep.equal([savePoint]);
@@ -89,7 +90,7 @@ describe('Store', function () {
         root: {},
         idToPath: {},
         pathToId: { ids: [] },
-        timestamp: ZERO_TIMESTAMP,
+        id: ZERO_ID,
         width: 4,
       },
       {
@@ -100,10 +101,10 @@ describe('Store', function () {
           qux: 3,
         },
         idToPath: {
-          [timestampToString(ts(1))]: ['foo'],
-          [timestampToString(ts(2))]: ['bar'],
-          [timestampToString(ts(3))]: ['baz'],
-          [timestampToString(ts(4))]: ['qux'],
+          [idToString(ts(1))]: ['foo'],
+          [idToString(ts(2))]: ['bar'],
+          [idToString(ts(3))]: ['baz'],
+          [idToString(ts(4))]: ['qux'],
         },
         pathToId: {
           ids: [],
@@ -114,7 +115,7 @@ describe('Store', function () {
             qux: { ids: [ts(4)] },
           },
         },
-        timestamp: ts(4),
+        id: ts(4),
         width: 4,
       },
       {
@@ -129,14 +130,14 @@ describe('Store', function () {
           garply: 7,
         },
         idToPath: {
-          [timestampToString(ts(1))]: ['foo'],
-          [timestampToString(ts(2))]: ['bar'],
-          [timestampToString(ts(3))]: ['baz'],
-          [timestampToString(ts(4))]: ['qux'],
-          [timestampToString(ts(5))]: ['quux'],
-          [timestampToString(ts(6))]: ['corge'],
-          [timestampToString(ts(7))]: ['grault'],
-          [timestampToString(ts(8))]: ['garply'],
+          [idToString(ts(1))]: ['foo'],
+          [idToString(ts(2))]: ['bar'],
+          [idToString(ts(3))]: ['baz'],
+          [idToString(ts(4))]: ['qux'],
+          [idToString(ts(5))]: ['quux'],
+          [idToString(ts(6))]: ['corge'],
+          [idToString(ts(7))]: ['grault'],
+          [idToString(ts(8))]: ['garply'],
         },
         pathToId: {
           ids: [],
@@ -151,7 +152,7 @@ describe('Store', function () {
             garply: { ids: [ts(8)] },
           },
         },
-        timestamp: ts(8),
+        id: ts(8),
         width: 4,
       },
     ];
@@ -159,7 +160,7 @@ describe('Store', function () {
     expect(saveState.load().savePoints).to.deep.equal(savePoints);
   });
 
-  it('should reference existing locations by timestamp', function () {
+  it('should reference existing locations by id', function () {
     const saveState = new MockSaveState(UUID1);
     const store = new Store(saveState);
     store.dispatch({
@@ -171,7 +172,7 @@ describe('Store', function () {
       action: 'Set',
       path: [{ type: 'Key', query: 'foo' }],
       payload: 1,
-      timestamp: { author: UUID1, index: 1 },
+      id: { author: UUID1, index: 1 },
     };
     expect(store.ops).to.deep.equal([op1]);
     store.dispatch({
@@ -188,12 +189,12 @@ describe('Store', function () {
         },
       ],
       payload: 2,
-      timestamp: { author: UUID1, index: 2 },
+      id: { author: UUID1, index: 2 },
     };
     expect(store.ops).to.deep.equal([op1, op2]);
   });
 
-  it('should write existing locations by timestamp', function () {
+  it('should write existing locations by id', function () {
     const saveState = new MockSaveState(UUID1);
     const store = new Store(saveState);
     store.dispatch({
@@ -278,25 +279,21 @@ describe('Store', function () {
     ]);
   });
 
-  it('should know how to locate timestamps in a list', function () {
+  it('should know how to locate ids in a list', function () {
     const list = [
-      { entry: 1, timestamp: { author: UUID1, index: 1 } },
-      { entry: 2, timestamp: { author: UUID1, index: 2 } },
-      { entry: 3, timestamp: { author: UUID2, index: 2 } },
-      { entry: 4, timestamp: { author: UUID1, index: 4 } },
+      { entry: 1, id: { author: UUID1, index: 1 } },
+      { entry: 2, id: { author: UUID1, index: 2 } },
+      { entry: 3, id: { author: UUID2, index: 2 } },
+      { entry: 4, id: { author: UUID1, index: 4 } },
     ];
 
-    expect(timestampIndex({ author: UUID1, index: 1 }, list)).to.equal(0);
-    expect(timestampIndex({ author: UUID1, index: 2 }, list)).to.equal(1);
-    expect(timestampIndex({ author: UUID2, index: 2 }, list, true)).to.equal(2);
-    expect(timestampIndex({ author: UUID1, index: 4 }, list, true)).to.equal(3);
-    expect(timestampIndex({ author: UUID1, index: 3 }, list, true)).to.equal(
-      -1
-    );
-    expect(timestampIndex({ author: UUID1, index: 3 }, list)).to.equal(3);
-    expect(timestampIndex({ author: UUID2, index: 4 }, list, true)).to.equal(
-      -1
-    );
+    expect(idIndex({ author: UUID1, index: 1 }, list)).to.equal(0);
+    expect(idIndex({ author: UUID1, index: 2 }, list)).to.equal(1);
+    expect(idIndex({ author: UUID2, index: 2 }, list, true)).to.equal(2);
+    expect(idIndex({ author: UUID1, index: 4 }, list, true)).to.equal(3);
+    expect(idIndex({ author: UUID1, index: 3 }, list, true)).to.equal(-1);
+    expect(idIndex({ author: UUID1, index: 3 }, list)).to.equal(3);
+    expect(idIndex({ author: UUID2, index: 4 }, list, true)).to.equal(-1);
   });
 
   function storeSync(
