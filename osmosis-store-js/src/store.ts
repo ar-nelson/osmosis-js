@@ -2,7 +2,9 @@ import produce, { Draft } from 'immer';
 import flatMap from 'lodash.flatmap';
 import last from 'lodash.last';
 import sortedIndexBy from 'lodash.sortedindexby';
+import * as uuid from 'uuid';
 import { Action, mapActionToList } from './actions';
+import Dispatchable from './dispatchable';
 import {
   anchorPathToId,
   applyIdMappedAction,
@@ -20,17 +22,17 @@ import {
   splitIntoSingularPaths,
   Vars,
 } from './jsonpath';
+import Queryable from './queryable';
 import {
   Cancelable,
   Failure,
   Json,
+  OsmosisFailureError,
   PathArray,
   Timestamp,
   timestampToString,
   Uuid,
-  OsmosisFailureError,
 } from './types';
-import * as uuid from 'uuid';
 
 export const ZERO_TIMESTAMP: Timestamp = { author: uuid.NIL, index: 0 };
 
@@ -81,7 +83,7 @@ export function timestampIndex(
   return -1;
 }
 
-export class Store {
+export class Store implements Dispatchable<JsonPathAction>, Queryable {
   private state: State;
   private readonly uuid: Uuid;
   private nextIndex = 1;
@@ -115,7 +117,6 @@ export class Store {
   }
 
   dispatch(action: JsonPathAction, returnFailures: true): Failure[];
-
   dispatch(action: JsonPathAction, returnFailures?: boolean): void;
 
   dispatch(
@@ -308,7 +309,7 @@ export class Store {
     callback: (json: Json) => void
   ): Cancelable;
 
-  subscribe(query: JsonPath, callback: (json: Json) => void): Cancelable;
+  subscribe(query: JsonPath, callback: (json: Json[]) => void): Cancelable;
 
   subscribe(
     query: JsonPath,
