@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Osmosis network stack: UDP peer discovery and encrypted JSON-RPC",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "author": "Adam Nelson <adam@nels.onl>",
   "license": "BlueOak-1.0.0",
   "repository": {

@@ -2,7 +2,8 @@
   "name": "@nels.onl/osmosis-store-js",
   "version": "0.1.0",
   "description": "Mergeable CRDT-based reactive JSON state management",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "author": "Adam Nelson <adam@nels.onl>",
   "license": "BlueOak-1.0.0",
   "repository": {

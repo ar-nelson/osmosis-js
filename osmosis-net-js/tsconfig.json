@@ -4,9 +4,11 @@
     "lib": ["ESNext"],
     "module": "commonjs",
     "outDir": "./dist",
-    "noEmit": true,
+    "emitDeclarationOnly": true,
     "esModuleInterop": true,
-    "strictNullChecks": true
+    "strictNullChecks": true,
+    "declarationMap": true,
+    "declaration": true
   },
-  "include": ["./src/**/*", "./test/**/*.spec.ts"]
+  "include": ["./src/**/*"]
 }
