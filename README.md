@@ -1,31 +1,53 @@
 # Osmosis
 
-An in-process JSON database with automatic peer-to-peer background synchronization between devices on a local network. Keep your apps in sync without a cloud!
+An in-process JSON database with automatic peer-to-peer background
+synchronization between devices on a local network. Keep your apps in sync
+without a cloud!
 
-> **🚧 WORK-IN-PROGRESS 🚧: Osmosis is not yet usable. The npm modules mentioned in this README are not available yet. Watch this space for updates.**
+> **🚧 WORK-IN-PROGRESS 🚧: Osmosis is not yet usable. The npm modules mentioned
+> in this README are not available yet. Watch this space for updates.**
 
-The library itself is `@nels.onl/osmosis-js`. Separate modules exist for the JSON CRDT datastore (`@nels.onl/osmosis-store-js`) and the network stack (`@nels.onl/osmosis-net-js`).
+The library itself is `@nels.onl/osmosis-js`. Separate modules exist for the
+JSON CRDT datastore (`@nels.onl/osmosis-store-js`) and the network stack
+(`@nels.onl/osmosis-net-js`).
 
-> The library is called `osmosis-js` instead of `osmosis` because this Node module is a non-portable reference implementation. Osmosis is really meant for mobile apps, but, unfortunately, this Node module with native dependencies is not easily usable on mobile.
+> The library is called `osmosis-js` instead of `osmosis` because this Node
+> module is a non-portable reference implementation. Osmosis is really meant for
+> mobile apps, but, unfortunately, this Node module with native dependencies is
+> not easily usable on mobile.
 >
-> My plan is to develop a portable native implementation in a systems language like C++, Rust, or Zig, and to provide bindings for several languages, including a Node wrapper at `@nels.onl/osmosis`. See the [Roadmap](#roadmap) for more information.
+> My plan is to develop a portable native implementation in a systems language
+> like C++, Rust, or Zig, and to provide bindings for several languages,
+> including a Node wrapper at `@nels.onl/osmosis`. See the [Roadmap](#roadmap)
+> for more information.
 
 ## Rationale
 
-Consider an app with both mobile and desktop versions, like a notetaking app, a password manager, or a podcast client. The user would like to keep its state synced between a laptop and a phone.
+Consider an app with both mobile and desktop versions, like a notetaking app,
+a password manager, or a podcast client. The user would like to keep its state
+synced between a laptop and a phone.
 
-Normally, this requires a cloud service to store the synced data. But, with Osmosis, after pairing the mobile and desktop apps once, they will detect each other every time they connect to the same Wi-Fi network, and will create a direct p2p connection to sync data.
+Normally, this requires a cloud service to store the synced data. But, with
+Osmosis, after pairing the mobile and desktop apps once, they will detect each
+other every time they connect to the same Wi-Fi network, and will create
+a direct p2p connection to sync data.
 
-Osmosis synchronization is automatic, encrypted, and relatively safe from conflicts. Updates are modeled with a JSON [CRDT][crdt]. It is possible for updates to fail, but this can only happen if a path is updated after its parent is deleted, or if non-typesafe changes are made (e.g., replacing an object with an array).
+Osmosis synchronization is automatic, encrypted, and relatively safe from
+conflicts. Updates are modeled with a JSON [CRDT][crdt]. It is possible for
+updates to fail, but this can only happen if a path is updated after its parent
+is deleted, or if non-typesafe changes are made (e.g., replacing an object with
+an array).
 
 ## Usage
 
 ### Database
 
-An Osmosis database is a single JSON object. Osmosis has the API of a reactive data store like Redux:
+An Osmosis database is a single JSON object. Osmosis has the API of a reactive
+data store like Redux:
 
 - Updates are [Actions](#actions), which are JSON messages.
-- Queries are listener callbacks, called every time the data at a given path is updated. Paths are expressed as [JsonPath][jsonpath].
+- Queries are listener callbacks, called every time the data at a given path is
+  updated. Paths are expressed as [JsonPath][jsonpath].
 
 Actions are sent with `dispatch`, and queries are created with `subscribe`.
 
@@ -58,14 +80,18 @@ store.dispatch({ action: 'InsertUnique', path: '$.numbers', payload: 3 });
 
 The pairing process looks like this:
 
-1. One device (the _Requester_) dispatches a `RequestPair` action, with a payload containing the UUID of another device (the _Responder_).
+1. One device (the _Requester_) dispatches a `RequestPair` action, with
+   a payload containing the UUID of another device (the _Responder_).
 2. The Requester generates a random 4-digit PIN and displays it to the user.
 3. The Responder receives the request and prompts the user for a PIN.
 4. The user enters the PIN.
-5. The Responder dispatches an `AcceptPair` action, with a payload containing the Requester's UUID and the PIN.
-6. The Requester receives the response. The devices are now paired, and will begin syncing in the background.
+5. The Responder dispatches an `AcceptPair` action, with a payload containing
+   the Requester's UUID and the PIN.
+6. The Requester receives the response. The devices are now paired, and will
+   begin syncing in the background.
 
-A basic pairing setup for Osmosis, which can send and receive pairing requests, looks like this:
+A basic pairing setup for Osmosis, which can send and receive pairing requests,
+looks like this:
 
 ```javascript
 import Osmosis from '@nels.onl/osmosis-js';
@@ -126,9 +152,14 @@ function pairWithFirstPeer() {
 
 There's a lot going on in this example, so let's take it one step at a time.
 
-`subscribeMeta` is like `subscribe`, except that it queries the Osmosis store's [Metadata](#metadata) instead of its data. Metadata includes things like network state, action history, and failures. All of this data is available as one queryable JSON object. `peers` is the list of visible peers, which updates every time a peer enters or leaves the network.
+`subscribeMeta` is like `subscribe`, except that it queries the Osmosis store's
+[Metadata](#metadata) instead of its data. Metadata includes things like network
+state, action history, and failures. All of this data is available as one
+queryable JSON object. `peers` is the list of visible peers, which updates every
+time a peer enters or leaves the network.
 
-An Osmosis store also emits [Events](#events), which can be listened to with the `on` method. Events are mostly network-related.
+An Osmosis store also emits [Events](#events), which can be listened to with the
+`on` method. Events are mostly network-related.
 
 Pairing Osmosis instances requires a few event listeners:
 
@@ -136,63 +167,99 @@ Pairing Osmosis instances requires a few event listeners:
 - `PairRequest` - fires when a pair request is received.
 - `PairResponse` - fires when a pair request is accepted or rejected.
 
-Finally, the pairing process uses some actions that operate on network state instead of data. `RequestPair`, `AcceptPair`, and `RejectPair`, among others, control the pairing process but are not part of the Osmosis store's history. These actions are documented in [Network Actions](#network-actions).
+Finally, the pairing process uses some actions that operate on network state
+instead of data. `RequestPair`, `AcceptPair`, and `RejectPair`, among others,
+control the pairing process but are not part of the Osmosis store's history.
+These actions are documented in [Network Actions](#network-actions).
 
 ## How it Works
 
 ### Discovery
 
-The first time an Osmosis instance is created, it generates a Peer ID and a public/private keypair. This data should be saved to disk, and loaded every time this Osmosis instance is started.
+The first time an Osmosis instance is created, it generates a Peer ID and
+a public/private keypair. This data should be saved to disk, and loaded every
+time this Osmosis instance is started.
 
-Osmosis uses two kinds of sockets: broadcast UDP sockets that send heartbeat packets, and unicast TCP sockets that send [Monocypher][monocypher]-encrypted, [zstandard][zstd]-compressed [JSON-RPC][jsonrpc] messages.
+Osmosis uses two kinds of sockets: broadcast UDP sockets that send heartbeat
+packets, and unicast TCP sockets that send [Monocypher][monocypher]-encrypted,
+[zstandard][zstd]-compressed [JSON-RPC][jsonrpc] messages.
 
-When a TCP socket is opened, each side sends its 16-byte Peer ID to the other. All subsequent TCP messages are formatted like this:
+When a TCP socket is opened, each side sends its 16-byte Peer ID to the other.
+All subsequent TCP messages are formatted like this:
 
-    [..][......................][.................... . . .
-    |   |                       |
-    |   Nonce (24 bytes)        Message (abs(Length) bytes)
-    |
-    Length (4 bytes, big-endian 32-bit int)
+```txt
+[..][......................][.................... . . .
+|   |                       |
+|   Nonce (24 bytes)        Message (abs(Length) bytes)
+|
+Length (4 bytes, big-endian 32-bit int)
+```
 
-If `Length` is negative, it signifies that the decrypted contents of `Message` are compressed. The length of `Message` is the absolute value of `Length`. `Message` is encrypted using Monocypher's AEAD and a shared key computed from one peer's private key and the other's public key. Inside is a JSON-RPC message, which may be compressed with zstandard.
+If `Length` is negative, it signifies that the decrypted contents of `Message`
+are compressed. The length of `Message` is the absolute value of `Length`.
+`Message` is encrypted using Monocypher's AEAD and a shared key computed from
+one peer's private key and the other's public key. Inside is a JSON-RPC message,
+which may be compressed with zstandard.
 
-Each Osmosis instance starts a TCP service, called the Gateway Service, on a random ephemeral port. This service receives pair requests and connection requests.
+Each Osmosis instance starts a TCP service, called the Gateway Service, on
+a random ephemeral port. This service receives pair requests and connection
+requests.
 
-Osmosis sends out a UDP heartbeat packet every minute, on the broadcast address of every broadcast-compatible IPv4 network interface, on a port computed from the first 2 bytes of the App ID:
+Osmosis sends out a UDP heartbeat packet every minute, on the broadcast address
+of every broadcast-compatible IPv4 network interface, on a port computed from
+the first 2 bytes of the App ID:
 
 ```javascript
 heartbeatPort = appId[0] | appId[1] << 8 | 0x8000; // always >= 32768
 ```
 
-The heartbeat is a [Protocol Buffer][protobuf] message containing the following information:
+The heartbeat is a [Protocol Buffer][protobuf] message containing the following
+information:
 
 - The App ID (a UUID)
 - The Peer ID (a UUID)
 - The port of the TCP Gateway Service
 - The peer's public key, used to encrypt messages to the Gateway Service
 
-When peer A receives peer B's heartbeat, it is only considered valid if the following conditions apply:
+When peer A receives peer B's heartbeat, it is only considered valid if the
+following conditions apply:
 
 - A and B have the same App ID
 - A and B have different Peer IDs
 - B's Gateway port is > 1024
-- A has not recently seen a heartbeat with B's Peer ID from a different IP address, or with a different port or public key
+- A has not recently seen a heartbeat with B's Peer ID from a different IP
+  address, or with a different port or public key
 - If A is already paired with B, B's public key has not changed since pairing
 
-When A receives a valid heartbeat from B, B is added to A's list of visible peers; it is removed if A does not receive a new heartbeat for 3 minutes.
+When A receives a valid heartbeat from B, B is added to A's list of visible
+peers; it is removed if A does not receive a new heartbeat for 3 minutes.
 
-Pairing is done using the Gateway Service. Once two peers are paired, they will connect as soon as one receives a valid heartbeat from the other. Connecting involves one peer creating a new TCP Connection Service on a random ephemeral port, with a random keypair, then sending this port and public key to the other peer, which responds with its own newly-generated public key. Once one peer is connected to the other's Connection Service, they synchronize their lists of paired peers and begin exchanging state updates.
+Pairing is done using the Gateway Service. Once two peers are paired, they will
+connect as soon as one receives a valid heartbeat from the other. Connecting
+involves one peer creating a new TCP Connection Service on a random ephemeral
+port, with a random keypair, then sending this port and public key to the other
+peer, which responds with its own newly-generated public key. Once one peer is
+connected to the other's Connection Service, they synchronize their lists of
+paired peers and begin exchanging state updates.
 
 ### Store
 
-The Osmosis store is a [Causal Tree][causal-tree] JSON [CRDT][crdt] made up of two parts:
+The Osmosis store is a [Causal Tree][causal-tree] JSON [CRDT][crdt] made up of
+two parts:
 
 - A list of Actions, each of which is tagged with an ID (peer UUID + Lamport number).
-- A list of Save Points, which are copies of the full JSON tree at specific points in time, with exponentially increasing gaps (first few are ~4 actions apart, then 8, then 16, and so on).
+- A list of Save Points, which are copies of the full JSON tree at specific
+  points in time, with exponentially increasing gaps (first few are ~4 actions
+  apart, then 8, then 16, and so on).
 
-The Save Points are a performance optimization to avoid reconstructing the full JSON tree from scratch every time a merge happens.
+The Save Points are a performance optimization to avoid reconstructing the full
+JSON tree from scratch every time a merge happens.
 
-When a new Action is dispatched, its `path` is compiled to a JSON representation. This may split the Action into multiple Actions. Each `path` is then further compiled to a Causal Tree representation by replacing the longest prefix referring to an existing location with that location's ID. Actions are only stored or synced in this fully-compiled form.
+When a new Action is dispatched, its `path` is compiled to a JSON
+representation. This may split the Action into multiple Actions. Each `path` is
+then further compiled to a Causal Tree representation by replacing the longest
+prefix referring to an existing location with that location's ID. Actions are
+only stored or synced in this fully-compiled form.
 
 ```javascript
 // Given this Osmosis store state:
@@ -201,15 +268,15 @@ When a new Action is dispatched, its `path` is compiled to a JSON representation
 // Composed of these (uncompiled) actions:
 [{
   action: "InitObject",
-  path" "$.foo",
+  path: "$.foo",
   id: { peer: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 1 }
 }, {
   action: "InitObject",
-  path" "$.foo.bar",
+  path: "$.foo.bar",
   id: { peer: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 2 }
 }, {
   action: "Set",
-  path" "$.foo.bar.baz",
+  path: "$.foo.bar.baz",
   payload: 1,
   id: { peer: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 3 }
 }]
@@ -234,7 +301,62 @@ When a new Action is dispatched, its `path` is compiled to a JSON representation
 
 ### Synchronization
 
-*To be written.*
+When two Osmosis instances establish a connection, they send each other a State
+Summary. The State Summary consists of a State Hash and a mapping from each
+known peer's Peer ID to its public key and latest Lamport number.
+
+The State Hash is a cumulative hash of the IDs of an instance's entire action
+history, in order. It is computed recursively:
+
+```txt
+StateHash(0) = 00000000000000000000000000000000...
+
+StateHash(i + 1) = Blake2B([........ . . . ........][..............][......])
+                                                 |    |                  |
+                   Blake2B(StateHash(i)) (64 bytes)   |                  |
+                                                      |                  |
+                        Peer ID of Actions[i] (16 bytes)                 |
+                                                                         |
+             Lamport number of Actions[i] (8 bytes, big-endian 64-bit uint)
+```
+
+If two peers have different State Hashes, they are out of sync and must be
+synchronized.
+
+Action synchronization uses a [Causal Tree][causal-tree] algorithm. Actions are
+sorted by ID, first by Lamport timestamp and then by peer UUID. Synchronization
+involves rolling back to the latest Save Point that is earlier than all new
+actions, then applying all actions after that point, while inserting new actions
+in sorted order.
+
+If a merged action fails, the failure is added to the `failures` metadata key
+and the action is skipped, but the remaining actions are applied as usual.
+
+Osmosis supports three kinds of sync operations: 
+
+1. **Append Sync:** Upon establishing a connection, Peer A looks at every
+   Lamport number in Peer B's State Summary, and sends Peer B a list of every
+   action whose Lamport number is greater than Peer B's latest Lamport number
+   for that action's Peer ID.
+
+2. **Rewind Sync:** This is attempted if, after an Append Sync, two peers still
+   have different State Hashes. Both peers rewind through their Save Points and
+   send each other their State Hashes until they find a point in their histories
+   that they agree on, then send each other all actions after that point.
+
+   Specifically, both peers rewind to their latest Save Point, then send each
+   other their new State Hash and latest action ID. If one peer is behind the
+   other, it applies actions after that Save Point until it reaches an action ID
+   ≥ the other peer's latest ID. This process is repeated until both peers have
+   the same State Hash.
+
+   If one peer rewinds all the way to its earliest Save Point without ever
+   matching the other's State Hash, the state is considered irreconcilable, and
+   the peers are automatically unpaired.
+
+3. **Realtime Sync:** While an Osmosis instance is connected to one or more
+   peers, newly dispatched actions are sent to all connected peers as soon as
+   they are dispatched.
 
 ## API
 
@@ -242,56 +364,97 @@ When a new Action is dispatched, its `path` is compiled to a JSON representation
 
 #### `new Osmosis(config)`
 
-Creates a new Osmosis store from the given configuration object. If a persistence mode and filename are provided, the Osmosis state will be read from a database file.
+Creates a new Osmosis store from the given configuration object. If
+a persistence mode and filename are provided, the Osmosis state will be read
+from a database file.
 
-`config` is an object with the following properties, all of which (except `appId`) are optional:
+`config` is an object with the following properties, all of which (except
+`appId`) are optional:
 
-- `appId`: A string that uniquely identifies this Osmosis app. Osmosis will only detect peers with the same appId. Should be something long and random, like a UUID.
-- `peerName`: A human-readable string to identify this device when pairing. Will appear in the UI of other devices when listing peers. Defaults to something randomly generated.
-- `persistence`: A string describing how Osmosis data is persisted to disk. Supported values are `'none'` (default), `'json'`, and `'sqlite'`. More values may be added in the future.
-- `filename`: The file to save Osmosis data to. Will be read immediately, then written continually whenever the Osmosis state is changed. Required if `persistence` is not `'none'`.
-- `minHistory`: An integer, defaults to `0`. The minimum number of past actions that Osmosis will preserve, even if it knows it doesn't need them (i.e., all known peers are synced). If you intend to do anything with Osmosis's history besides syncing, this should be set to something other than `0`. If it is `-1`, history will never be deleted.
-- `maxHistory`: An integer, defaults to `32768`. The maximum number of actions that Osmosis will remember while preserving history for a pending sync that may need that history. If Osmosis accumulates more than this amount of history without syncing, it will start deleting history, which could make future synchronization impossible. If it is `-1`, there is no limit.
-- `visibleToPeers`: Whether this Osmosis instance is initially visible to other, non-paired peers on the network. Defaults to `true`.
-- `syncEnabled`: Whether this Osmosis instance is initially able to connect to paired peers and sync. Defaults to `true`.
+- `appId`: A string that uniquely identifies this Osmosis app. Osmosis will only
+  detect peers with the same appId. Should be something long and random, like
+  a UUID.
+- `peerName`: A human-readable string to identify this device when pairing. Will
+  appear in the UI of other devices when listing peers. Defaults to something
+  randomly generated.
+- `persistence`: A string describing how Osmosis data is persisted to disk.
+  Supported values are `'none'` (default), `'json'`, and `'sqlite'`. More values
+  may be added in the future.
+- `filename`: The file to save Osmosis data to. Will be read immediately, then
+  written continually whenever the Osmosis state is changed. Required if
+  `persistence` is not `'none'`.
+- `minHistory`: An integer, defaults to `0`. The minimum number of past actions
+  that Osmosis will preserve, even if it knows it doesn't need them (i.e., all
+  known peers are synced). If you intend to do anything with Osmosis's history
+  besides syncing, this should be set to something other than `0`. If it is
+  `-1`, history will never be deleted.
+- `maxHistory`: An integer, defaults to `32768`. The maximum number of actions
+  that Osmosis will remember while preserving history for a pending sync that
+  may need that history. If Osmosis accumulates more than this amount of history
+  without syncing, it will start deleting history, which could make future
+  synchronization impossible. If it is `-1`, there is no limit.
+- `visibleToPeers`: Whether this Osmosis instance is initially visible to other,
+  non-paired peers on the network. Defaults to `true`.
+- `syncEnabled`: Whether this Osmosis instance is initially able to connect to
+  paired peers and sync. Defaults to `true`.
 
 #### `Osmosis.dispatch(action, returnFailures = false)`
 
-Submits an [Action](#actions) to the store. Throws an `OsmosisFailureError` if the action reports any failures. If `returnFailures` is true, it does not throw, and instead returns an array of failures, which will be empty if the action did not cause any failures.
+Submits an [Action](#actions) to the store. Throws an `OsmosisFailureError` if
+the action reports any failures. If `returnFailures` is true, it does not throw,
+and instead returns an array of failures, which will be empty if the action did
+not cause any failures.
 
 #### `Osmosis.subscribe(path, variables = [], callback)`
 
-Subscribes to update events on the data queried by the JsonPath string `path`. `callback` is called with an array of JSON values, which may be empty if there is nothing at the subscribed path. Whenever the subscribed data is updated, `callback` is called again with a new array of query results.
+Subscribes to update events on the data queried by the JsonPath string `path`.
+`callback` is called with an array of JSON values, which may be empty if there
+is nothing at the subscribed path. Whenever the subscribed data is updated,
+`callback` is called again with a new array of query results.
 
-`variables`, if present, is an array or object containing variables to interpolate into `path`.
+`variables`, if present, is an array or object containing variables to
+interpolate into `path`.
 
-Returns an object with one method, `cancel`. Calling `cancel()` on this object will cancel the subscription, and `callback` will not be called again.
+Returns an object with one method, `cancel`. Calling `cancel()` on this object
+will cancel the subscription, and `callback` will not be called again.
 
 #### `Osmosis.subscribeMeta(path, variables = [], callback)`
 
-Subscribes to update events on the [Metadata](#metadata) queried by the JsonPath string `path`. `callback` is called with an array of JSON values, which may be empty if there is nothing at the subscribed path. Whenever the subscribed data is updated, `callback` is called again with a new array of query results.
+Subscribes to update events on the [Metadata](#metadata) queried by the JsonPath
+string `path`. `callback` is called with an array of JSON values, which may be
+empty if there is nothing at the subscribed path. Whenever the subscribed data
+is updated, `callback` is called again with a new array of query results.
 
-`variables`, if present, is an array or object containing variables to interpolate into `path`.
+`variables`, if present, is an array or object containing variables to
+interpolate into `path`.
 
-Returns an object with one method, `cancel`. Calling `cancel()` on this object will cancel the subscription, and `callback` will not be called again.
+Returns an object with one method, `cancel`. Calling `cancel()` on this object
+will cancel the subscription, and `callback` will not be called again.
 
 #### `Osmosis.queryOnce(path, variables = [])`
 
-Synchronously queries the store using the JsonPath string `path`, and returns the result as an array of JSON values.
+Synchronously queries the store using the JsonPath string `path`, and returns
+the result as an array of JSON values.
 
-`variables`, if present, is an array or object containing variables to interpolate into `path`.
+`variables`, if present, is an array or object containing variables to
+interpolate into `path`.
 
 #### `Osmosis.queryOnceMeta(path, variables = [])`
 
-Synchronously queries the store's [Metadata](#metadata) using the JsonPath string `path`, and returns the result as an array of JSON values.
+Synchronously queries the store's [Metadata](#metadata) using the JsonPath
+string `path`, and returns the result as an array of JSON values.
 
-`variables`, if present, is an array or object containing variables to interpolate into `path`.
+`variables`, if present, is an array or object containing variables to
+interpolate into `path`.
 
 #### `Osmosis.on(eventName, callback)`
 
-Registers an event listener for the [Event](#events) `eventName`. `callback` is called with one argument (the event) whenever an event of this type occurs. Throws an exception if `eventName` is not a known event type.
+Registers an event listener for the [Event](#events) `eventName`. `callback` is
+called with one argument (the event) whenever an event of this type occurs.
+Throws an exception if `eventName` is not a known event type.
 
-Returns an object with one method, `cancel`. Calling `cancel()` on this object will cancel the event listener, and `callback` will not be called again.
+Returns an object with one method, `cancel`. Calling `cancel()` on this object
+will cancel the event listener, and `callback` will not be called again.
 
 ### Actions
 
@@ -425,24 +588,37 @@ Returns an object with one method, `cancel`. Calling `cancel()` on this object w
 
 #### `actions`
 
-An array containing the data actions that make up this Osmosis store's history, except for actions that have been removed by garbage collection.
+An array containing the data actions that make up this Osmosis store's history,
+except for actions that have been removed by garbage collection.
 
-Actions are stored in a different format than the format used by `dispatch`. Each action has a `timestamp` and an `id`, JsonPath strings are compiled into JSON objects, and actions with complex paths may be split up into multiple actions.
+Actions are stored in a different format than the format used by `dispatch`.
+Each action has a `timestamp` and an `id`, JsonPath strings are compiled into
+JSON objects, and actions with complex paths may be split up into multiple
+actions.
 
-Note that, by default, Osmosis's garbage collection is extremely aggressive. History is only preserved if it is absolutely necessary for a pending sync, and is deleted as soon as all known paired peers are synced. If you want more history (for example, as an Undo feature), set the `minHistory` and `maxHistory` config parameters when constructing a `new Osmosis` object.
+Note that, by default, Osmosis's garbage collection is extremely aggressive.
+History is only preserved if it is absolutely necessary for a pending sync, and
+is deleted as soon as all known paired peers are synced. If you want more
+history (for example, as an Undo feature), set the `minHistory` and `maxHistory`
+config parameters when constructing a `new Osmosis` object.
 
 #### `config`
 
-The configuration options for this Osmosis instance, which are a combination of the options set in the `new Osmosis` constructor and these additional options that are saved to the persistence file:
+The configuration options for this Osmosis instance, which are a combination of
+the options set in the `new Osmosis` constructor and these additional options
+that are saved to the persistence file:
 
 - `peerId`
 - `groupId`
 
 #### `failures`
 
-An array of all failures caused by all actions in this store's history. If synced actions from other peers cause failures, this is the only place they will be reported. Each failure has an `id` linking it to the action that caused it.
+An array of all failures caused by all actions in this store's history. If
+synced actions from other peers cause failures, this is the only place they will
+be reported. Each failure has an `id` linking it to the action that caused it.
 
-When an action is deleted by garbage collection, its failures will also be removed from this array.
+When an action is deleted by garbage collection, its failures will also be
+removed from this array.
 
 #### `pairings`
 
@@ -450,7 +626,8 @@ An array of all paired peers, whether they are currently visible or not.
 
 #### `peers`
 
-An array of all peers currently visible on the network. Peers are visible only if they share the same `appId`.
+An array of all peers currently visible on the network. Peers are visible only
+if they share the same `appId`.
 
 ## Roadmap
 
@@ -458,6 +635,8 @@ An array of all peers currently visible on the network. Peers are visible only i
 - [ ] RxJS wrapper library
 - [ ] Sample app
 - [ ] [Chronofold][chronofold]-like string actions
+- [ ] SQLite support
+- [ ] Run without keeping entire DB in memory
 - [ ] Blobs and blob actions
 - [ ] Standalone database app
 - [ ] Port to a systems language (C++, Rust, Zig)
@@ -479,7 +658,9 @@ An array of all peers currently visible on the network. Peers are visible only i
 
 Copyright &copy; 2020 Adam Nelson
 
-Osmosis is distributed under the [Blue Oak Model License][blue-oak]. It is a MIT/BSD-style license, but with [some clarifying improvements][why-blue-oak] around patents, attribution, and multiple contributors.
+Osmosis is distributed under the [Blue Oak Model License][blue-oak]. It is
+a MIT/BSD-style license, but with [some clarifying improvements][why-blue-oak]
+around patents, attribution, and multiple contributors.
 
 [jsonpath]: https://goessner.net/articles/JsonPath/
 [causal-tree]: http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.627.5286
