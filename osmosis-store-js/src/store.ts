@@ -3,7 +3,16 @@ import flatMap from 'lodash.flatmap';
 import last from 'lodash.last';
 import { Action, mapActionToList } from './actions';
 import Dispatchable from './dispatchable';
-import { CausalTree, Id, idIndex, idToString, Uuid, ZERO_ID } from './id';
+import {
+  CausalTree,
+  Id,
+  idIndex,
+  idToString,
+  nextStateHash,
+  Uuid,
+  ZERO_ID,
+  ZERO_STATE_HASH,
+} from './id';
 import {
   anchorPathToId,
   applyIdMappedAction,
@@ -32,12 +41,17 @@ import {
 
 export type Op = CausalTree & Action<CompiledJsonPath | CompiledJsonIdPath>;
 
-export interface SavePoint extends IdMappedJson {
+export interface StateSummary {
+  readonly hash: Uint8Array;
+  readonly latestIndexes: { readonly [peerId: string]: number };
+}
+
+export interface SavePoint extends IdMappedJson, StateSummary {
   readonly id: Id;
   readonly width: number;
 }
 
-interface State extends IdMappedJson {
+interface State extends IdMappedJson, StateSummary {
   readonly ops: readonly Op[];
   readonly savePoints: readonly SavePoint[];
 }
@@ -71,6 +85,8 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
         pathToId: { ids: [] },
         id: ZERO_ID,
         width: MIN_SAVE_POINT_SIZE,
+        hash: ZERO_STATE_HASH,
+        latestIndexes: {},
       };
       savePoints = [firstSavePoint];
       saveState.addSavePoint(firstSavePoint);
@@ -85,6 +101,8 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
         pathToId: savePoint.pathToId,
         ops,
         savePoints,
+        hash: ZERO_STATE_HASH,
+        latestIndexes: {},
       });
   }
 
@@ -170,6 +188,8 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
       state.pathToId = lastSavePoint.pathToId;
       state.savePoints = state.savePoints.slice(0, indexOfLastSavePoint);
       state.ops = state.ops.slice(0, opIndexOfLastSavePoint);
+      state.hash = lastSavePoint.hash;
+      state.latestIndexes = lastSavePoint.latestIndexes;
       this.saveState.deleteEverythingAfter(lastSavePoint.id);
     });
 
@@ -206,6 +226,11 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
       a.action === 'Transaction' ? a.payload : [a]
     );
     let newState = produce(state, (state) => {
+      state.hash = nextStateHash(state.hash as Uint8Array, op.id);
+      state.latestIndexes[op.id.author] = Math.max(
+        state.latestIndexes[op.id.author] || 0,
+        op.id.index
+      );
       directActions.forEach((action) => {
         const result = applyIdMappedAction(action, state);
         if (result.failed) {
@@ -217,6 +242,9 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
     });
     if (op.action === 'Transaction' && totalFailures.length) {
       totalChanged = [];
+      // FIXME: We can't drop failed transactions completely.
+      // This would cause hashes to not line up, because an op would be missing.
+      // Undo the changes to the JSON state, but not the op list or hash.
       newState = state;
     }
     if (
@@ -233,6 +261,7 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
         this.saveState.addSavePoint(last(newState.savePoints) as SavePoint);
       }
     }
+    this.nextIndex = Math.max(this.nextIndex, op.id.index + 1);
     return { state: newState, changed: totalChanged, failures: totalFailures };
   }
 
@@ -242,6 +271,8 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
     pathToId,
     savePoints,
     ops,
+    hash,
+    latestIndexes,
   }: Draft<State>): boolean {
     if (
       ops.length < MIN_SAVE_POINT_SIZE ||
@@ -265,6 +296,8 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
       pathToId,
       id,
       width: MIN_SAVE_POINT_SIZE,
+      hash,
+      latestIndexes,
     });
     return true;
   }
@@ -304,6 +337,13 @@ export class Store implements Dispatchable<JsonPathAction>, Queryable {
 
   get savePoints(): readonly SavePoint[] {
     return this.state.savePoints;
+  }
+
+  get stateSummary(): StateSummary {
+    return {
+      hash: this.state.hash,
+      latestIndexes: this.state.latestIndexes,
+    };
   }
 }
 

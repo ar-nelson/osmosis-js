@@ -80,7 +80,7 @@ export default class JsonFileSaveState implements SaveState {
 
   addSavePoint(savePoint: SavePoint): void {
     this.saveFile = produce(this.saveFile, ({ savePoints }) => {
-      savePoints.push(savePoint as Draft<SavePoint>);
+      savePoints.push(savePoint as any);
     });
     this.scheduleWrite();
   }

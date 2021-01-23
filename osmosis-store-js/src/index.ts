@@ -10,7 +10,16 @@ export {
   Transaction,
   VoidAction,
 } from './actions';
-export { CausalTree, Id, idIndex, idToString, Uuid, ZERO_ID } from './id';
+export {
+  CausalTree,
+  Id,
+  idIndex,
+  idToString,
+  nextStateHash,
+  Uuid,
+  ZERO_ID,
+  ZERO_STATE_HASH,
+} from './id';
 export {
   CompiledJsonIdPath,
   CompiledJsonPath,
@@ -31,7 +40,7 @@ export {
   Vars,
 } from './jsonpath';
 export { MetadataSource, MetaStore } from './meta-store';
-export { Op, SavePoint, SaveState, Store } from './store';
+export { Op, SavePoint, SaveState, StateSummary, Store } from './store';
 export {
   Cancelable,
   Failure,

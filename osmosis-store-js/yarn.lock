@@ -2503,6 +2503,11 @@ mocha@^8.2.1:
     yargs-parser "13.1.2"
     yargs-unparser "2.0.0"
 
+monocypher-wasm@^3.1.2-3:
+  version "3.1.2-3"
+  resolved "https://registry.yarnpkg.com/monocypher-wasm/-/monocypher-wasm-3.1.2-3.tgz#35175234f233f60a84f78867c9a487a392ae0a33"
+  integrity sha512-ff8EuymCnjg0hHKkgFF6EsbcXW1iNjTgPMNv2mbT5NX5Wm7/uEDHFD4b7uQqnVlzFAtn/d4zrROPxUbrckizSA==
+
 moo@^0.5.0:
   version "0.5.1"
   resolved "https://registry.yarnpkg.com/moo/-/moo-0.5.1.tgz#7aae7f384b9b09f620b6abf6f74ebbcd1b65dbc4"

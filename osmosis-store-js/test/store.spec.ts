@@ -1,7 +1,13 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
 import { Action } from '../src/actions';
-import { idIndex, idToString, ZERO_ID } from '../src/id';
+import {
+  idIndex,
+  idToString,
+  nextStateHash,
+  ZERO_ID,
+  ZERO_STATE_HASH,
+} from '../src/id';
 import { Store } from '../src/store';
 import { Json } from '../src/types';
 import MockSaveState from './mock-save-state';
@@ -66,6 +72,8 @@ describe('Store', function () {
       pathToId: { ids: [] },
       id: ZERO_ID,
       width: 4,
+      hash: ZERO_STATE_HASH,
+      latestIndexes: {},
     };
     expect(store.savePoints).to.deep.equal([savePoint]);
     expect(saveState.load().savePoints).to.deep.equal([savePoint]);
@@ -92,6 +100,8 @@ describe('Store', function () {
         pathToId: { ids: [] },
         id: ZERO_ID,
         width: 4,
+        hash: ZERO_STATE_HASH,
+        latestIndexes: {},
       },
       {
         root: {
@@ -117,6 +127,11 @@ describe('Store', function () {
         },
         id: ts(4),
         width: 4,
+        hash: [1, 2, 3, 4].reduce(
+          (hash, i) => nextStateHash(hash, ts(i)),
+          ZERO_STATE_HASH
+        ),
+        latestIndexes: { [UUID1]: 4 },
       },
       {
         root: {
@@ -154,6 +169,11 @@ describe('Store', function () {
         },
         id: ts(8),
         width: 4,
+        hash: [1, 2, 3, 4, 5, 6, 7, 8].reduce(
+          (hash, i) => nextStateHash(hash, ts(i)),
+          ZERO_STATE_HASH
+        ),
+        latestIndexes: { [UUID1]: 8 },
       },
     ];
     expect(store.savePoints).to.deep.equal(savePoints);
