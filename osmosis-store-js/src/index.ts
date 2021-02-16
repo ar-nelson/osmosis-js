@@ -1,6 +1,7 @@
 export {
   Action,
-  applyAction,
+  Change,
+  actionToChanges,
   mapAction,
   mapActionToList,
   MathAction,
@@ -21,6 +22,13 @@ export {
   ZERO_STATE_HASH,
 } from './id';
 export {
+  JsonAdapter,
+  JsonJsonAdapter,
+  PlusScalarAdapter,
+  JsonAdapterResult,
+  NO_RESULT,
+} from './json-adapter';
+export {
   CompiledJsonIdPath,
   CompiledJsonPath,
   compileJsonPath,
@@ -38,9 +46,9 @@ export {
   queryValues,
   splitIntoSingularPaths,
   Vars,
+  jsonPathToString,
 } from './jsonpath';
 export { MetadataSource, MetaStore } from './meta-store';
-export { Op, SavePoint, SaveState, StateSummary, Store } from './store';
 export {
   Cancelable,
   Failure,
@@ -49,7 +57,9 @@ export {
   JsonObject,
   OsmosisFailureError,
 } from './types';
-export { Dispatchable, Queryable, JsonFileSaveState };
+export { Store, Dispatchable, Queryable, InMemorySaveState, JsonFileSaveState };
 import Dispatchable from './dispatchable';
-import JsonFileSaveState from './json-file-save-state';
 import Queryable from './queryable';
+import InMemorySaveState from './in-memory-save-state';
+import JsonFileSaveState from './json-file-save-state';
+import Store from './store';

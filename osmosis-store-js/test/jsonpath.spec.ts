@@ -1,5 +1,6 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
+import { JsonJsonAdapter } from '../src/json-adapter';
 import { compileJsonPath, queryPaths, queryValues } from '../src/jsonpath';
 
 describe('JsonPath', function () {
@@ -282,7 +283,9 @@ describe('JsonPath', function () {
   };
 
   it('should query an existing literal path', function () {
-    expect(queryPaths(fooBarJson, compileJsonPath('$.foo.bar'))).to.deep.equal({
+    expect(
+      queryPaths(compileJsonPath('$.foo.bar'), fooBarJson, JsonJsonAdapter)
+    ).to.deep.equal({
       existing: [['foo', 'bar']],
       potential: [],
       failures: [],
@@ -290,7 +293,9 @@ describe('JsonPath', function () {
   });
 
   it('should query a potential literal path', function () {
-    expect(queryPaths(fooBarJson, compileJsonPath('$.foo.qux'))).to.deep.equal({
+    expect(
+      queryPaths(compileJsonPath('$.foo.qux'), fooBarJson, JsonJsonAdapter)
+    ).to.deep.equal({
       existing: [],
       potential: [['foo', 'qux']],
       failures: [],
@@ -298,7 +303,9 @@ describe('JsonPath', function () {
   });
 
   it('should report a failure on a query for a missing literal path', function () {
-    expect(queryPaths(fooBarJson, compileJsonPath('$.baz.qux'))).to.deep.equal({
+    expect(
+      queryPaths(compileJsonPath('$.baz.qux'), fooBarJson, JsonJsonAdapter)
+    ).to.deep.equal({
       existing: [],
       potential: [],
       failures: [{ path: ['baz'], message: 'path does not exist' }],
@@ -307,14 +314,15 @@ describe('JsonPath', function () {
 
   it('should extract a value with queryValues', function () {
     expect(
-      queryValues(fooBarJson, compileJsonPath('$.foo.bar'))
+      queryValues(compileJsonPath('$.foo.bar'), fooBarJson, JsonJsonAdapter)
     ).to.deep.equal([1]);
   });
 
   it('should query multiple existing paths with ..', function () {
     const { existing, potential, failures } = queryPaths(
+      compileJsonPath('$..bar'),
       fooBarJson,
-      compileJsonPath('$..bar')
+      JsonJsonAdapter
     );
     expect(potential).to.be.empty;
     expect(failures).to.be.empty;
@@ -326,7 +334,7 @@ describe('JsonPath', function () {
   });
 
   it('should extract multiple values with queryValues and ..', function () {
-    expect(queryValues(fooBarJson, compileJsonPath('$..bar')))
+    expect(queryValues(compileJsonPath('$..bar'), fooBarJson, JsonJsonAdapter))
       .to.have.length(3)
       .and.to.contain(1)
       .and.to.contain(4)

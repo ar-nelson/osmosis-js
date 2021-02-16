@@ -1,3 +1,4 @@
+import { JsonJsonAdapter } from './json-adapter';
 import { compileJsonPath, JsonPath, queryValues, Vars } from './jsonpath';
 import Queryable from './queryable';
 import { Cancelable, Json, JsonObject } from './types';
@@ -54,12 +55,16 @@ export class MetaStore implements Queryable {
         break;
     }
     const handlers = keys.map((key) => (json: Json) =>
-      callback(queryValues({ ...this.state, [key]: json }, path))
+      callback(
+        queryValues(path, { ...this.state, [key]: json }, JsonJsonAdapter)
+      )
     );
     for (let i = 0; i < keys.length; i++) {
       this.sources[keys[i]].subscribe(handlers[i]);
     }
-    setImmediate(() => callback(queryValues(this.state, path)));
+    setImmediate(() =>
+      callback(queryValues(path, this.state, JsonJsonAdapter))
+    );
     return {
       cancel() {
         for (let i = 0; i < keys.length; i++) {
@@ -70,6 +75,10 @@ export class MetaStore implements Queryable {
   }
 
   queryOnce(query: JsonPath, vars: Vars = {}): Json[] {
-    return queryValues(this.state, compileJsonPath(query, vars));
+    return queryValues(
+      compileJsonPath(query, vars),
+      this.state,
+      JsonJsonAdapter
+    );
   }
 }

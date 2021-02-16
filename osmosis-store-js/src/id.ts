@@ -1,6 +1,6 @@
 import sortedIndexBy from 'lodash.sortedindexby';
+import { crypto_blake2b, HASH_BYTES } from 'monocypher-wasm';
 import * as uuid from 'uuid';
-import { HASH_BYTES, crypto_blake2b } from 'monocypher-wasm';
 
 export type Uuid = string;
 
@@ -17,6 +17,12 @@ export const ZERO_ID: Id = { author: uuid.NIL, index: 0 };
 
 export function idToString({ author, index }: Id): string {
   return `${index.toString(32).padStart(11, '0')}@${author}`;
+}
+
+export function idCompare(id1: Id, id2: Id): number {
+  const str1 = idToString(id1);
+  const str2 = idToString(id2);
+  return str1.localeCompare(str2, 'en');
 }
 
 export function idIndex(

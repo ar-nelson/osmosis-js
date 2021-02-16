@@ -1,23 +1,19 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
 import { Action } from '../src/actions';
-import {
-  idIndex,
-  idToString,
-  nextStateHash,
-  ZERO_ID,
-  ZERO_STATE_HASH,
-} from '../src/id';
-import { Store } from '../src/store';
+import { idIndex, nextStateHash, ZERO_ID, ZERO_STATE_HASH } from '../src/id';
+import InMemorySaveState from '../src/in-memory-save-state';
+import Store from '../src/store';
 import { Json } from '../src/types';
-import MockSaveState from './mock-save-state';
 
 describe('Store', function () {
   const UUID1 = '1cca2959-e698-4bf2-853b-2957a51a86cc';
   const UUID2 = 'ecdb8ebf-e896-45e9-8bf9-1cf99db583b0';
 
   it('should set and query a single value', function () {
-    const store = new Store(new MockSaveState(UUID1));
+    const store = new Store(
+      new InMemorySaveState({ metadata: { uuid: UUID1 } })
+    );
     store.dispatch({
       action: 'Set',
       path: '$.foo',
@@ -28,7 +24,7 @@ describe('Store', function () {
   });
 
   it('should add each compiled op to the ops list', function () {
-    const saveState = new MockSaveState(UUID1);
+    const saveState = new InMemorySaveState({ metadata: { uuid: UUID1 } });
     const store = new Store(saveState);
     store.dispatch({
       action: 'Set',
@@ -42,7 +38,7 @@ describe('Store', function () {
       id: { author: UUID1, index: 1 },
     };
     expect(store.ops).to.deep.equal([op1]);
-    expect(saveState.load().ops).to.deep.equal([op1]);
+    expect(saveState.ops()).to.deep.equal([op1]);
     store.dispatch({
       action: 'Set',
       path: '$.bar',
@@ -55,11 +51,11 @@ describe('Store', function () {
       id: { author: UUID1, index: 2 },
     };
     expect(store.ops).to.deep.equal([op1, op2]);
-    expect(saveState.load().ops).to.deep.equal([op1, op2]);
+    expect(saveState.ops()).to.deep.equal([op1, op2]);
   });
 
   it('should create an initial save point', function () {
-    const saveState = new MockSaveState(UUID1);
+    const saveState = new InMemorySaveState({ metadata: { uuid: UUID1 } });
     const store = new Store(saveState);
     store.dispatch({
       action: 'Set',
@@ -67,20 +63,19 @@ describe('Store', function () {
       payload: 1,
     });
     const savePoint = {
-      root: {},
-      idToPath: {},
-      pathToId: { ids: [] },
       id: ZERO_ID,
       width: 4,
       hash: ZERO_STATE_HASH,
       latestIndexes: {},
     };
-    expect(store.savePoints).to.deep.equal([savePoint]);
-    expect(saveState.load().savePoints).to.deep.equal([savePoint]);
+    expect(store.savePoints).to.have.length(1);
+    expect(saveState.savePoints()).to.have.length(1);
+    expect(store.savePoints[0]).to.deep.include(savePoint);
+    expect(saveState.savePoints()[0]).to.deep.include(savePoint);
   });
 
   it('should create a new save point every 4 ops', function () {
-    const saveState = new MockSaveState(UUID1);
+    const saveState = new InMemorySaveState({ metadata: { uuid: UUID1 } });
     const store = new Store(saveState);
     ['foo', 'bar', 'baz', 'qux', 'quux', 'corge', 'grault', 'garply'].forEach(
       (key, payload) => {
@@ -95,36 +90,12 @@ describe('Store', function () {
     const ts = (index) => ({ author: UUID1, index });
     const savePoints = [
       {
-        root: {},
-        idToPath: {},
-        pathToId: { ids: [] },
         id: ZERO_ID,
         width: 4,
         hash: ZERO_STATE_HASH,
         latestIndexes: {},
       },
       {
-        root: {
-          foo: 0,
-          bar: 1,
-          baz: 2,
-          qux: 3,
-        },
-        idToPath: {
-          [idToString(ts(1))]: ['foo'],
-          [idToString(ts(2))]: ['bar'],
-          [idToString(ts(3))]: ['baz'],
-          [idToString(ts(4))]: ['qux'],
-        },
-        pathToId: {
-          ids: [],
-          subtree: {
-            foo: { ids: [ts(1)] },
-            bar: { ids: [ts(2)] },
-            baz: { ids: [ts(3)] },
-            qux: { ids: [ts(4)] },
-          },
-        },
         id: ts(4),
         width: 4,
         hash: [1, 2, 3, 4].reduce(
@@ -134,39 +105,6 @@ describe('Store', function () {
         latestIndexes: { [UUID1]: 4 },
       },
       {
-        root: {
-          foo: 0,
-          bar: 1,
-          baz: 2,
-          qux: 3,
-          quux: 4,
-          corge: 5,
-          grault: 6,
-          garply: 7,
-        },
-        idToPath: {
-          [idToString(ts(1))]: ['foo'],
-          [idToString(ts(2))]: ['bar'],
-          [idToString(ts(3))]: ['baz'],
-          [idToString(ts(4))]: ['qux'],
-          [idToString(ts(5))]: ['quux'],
-          [idToString(ts(6))]: ['corge'],
-          [idToString(ts(7))]: ['grault'],
-          [idToString(ts(8))]: ['garply'],
-        },
-        pathToId: {
-          ids: [],
-          subtree: {
-            foo: { ids: [ts(1)] },
-            bar: { ids: [ts(2)] },
-            baz: { ids: [ts(3)] },
-            qux: { ids: [ts(4)] },
-            quux: { ids: [ts(5)] },
-            corge: { ids: [ts(6)] },
-            grault: { ids: [ts(7)] },
-            garply: { ids: [ts(8)] },
-          },
-        },
         id: ts(8),
         width: 4,
         hash: [1, 2, 3, 4, 5, 6, 7, 8].reduce(
@@ -177,11 +115,11 @@ describe('Store', function () {
       },
     ];
     expect(store.savePoints).to.deep.equal(savePoints);
-    expect(saveState.load().savePoints).to.deep.equal(savePoints);
+    expect(saveState.savePoints()).to.deep.equal(savePoints);
   });
 
   it('should reference existing locations by id', function () {
-    const saveState = new MockSaveState(UUID1);
+    const saveState = new InMemorySaveState({ metadata: { uuid: UUID1 } });
     const store = new Store(saveState);
     store.dispatch({
       action: 'Set',
@@ -215,7 +153,7 @@ describe('Store', function () {
   });
 
   it('should write existing locations by id', function () {
-    const saveState = new MockSaveState(UUID1);
+    const saveState = new InMemorySaveState({ metadata: { uuid: UUID1 } });
     const store = new Store(saveState);
     store.dispatch({
       action: 'Set',
@@ -231,7 +169,9 @@ describe('Store', function () {
   });
 
   it('should report failures when dispatching an action', function () {
-    const store = new Store(new MockSaveState(UUID1));
+    const store = new Store(
+      new InMemorySaveState({ metadata: { uuid: UUID1 } })
+    );
     expect(
       store.dispatch(
         {
@@ -245,7 +185,7 @@ describe('Store', function () {
   });
 
   it('should support all action types', function () {
-    const saveState = new MockSaveState(UUID1);
+    const saveState = new InMemorySaveState({ metadata: { uuid: UUID1 } });
     const store = new Store(saveState);
     store.dispatch({
       action: 'InitArray',
@@ -277,8 +217,8 @@ describe('Store', function () {
     });
     store.dispatch({
       action: 'Copy',
-      path: '$.foo',
-      payload: '$.bar.baz',
+      path: '$.bar.baz',
+      payload: '$.foo',
     });
     store.dispatch({
       action: 'Delete',
@@ -286,8 +226,8 @@ describe('Store', function () {
     });
     store.dispatch({
       action: 'Move',
-      path: '$.foo',
-      payload: '$.bar.qux',
+      path: '$.bar.qux',
+      payload: '$.foo',
     });
     expect(store.queryOnce('$')).to.deep.equal([
       {
@@ -318,61 +258,56 @@ describe('Store', function () {
 
   function storeSync(
     steps: [Action<string>[], Action<string>[]][],
-    store1 = new Store(new MockSaveState(UUID1)),
-    store2 = new Store(new MockSaveState(UUID2)),
+    store1 = new Store(new InMemorySaveState({ metadata: { uuid: UUID1 } })),
+    store2 = new Store(new InMemorySaveState({ metadata: { uuid: UUID2 } })),
     allowFailures = false
   ): Json {
-    let lastOp1 = store1.ops.length;
-    let lastOp2 = store2.ops.length;
-
     steps.forEach(([actions1, actions2]) => {
+      const lastOp1 = store1.ops.length;
+      const lastOp2 = store2.ops.length;
       actions1.forEach((a) => {
         store1.dispatch(a, allowFailures);
       });
       actions2.forEach((a) => {
         store2.dispatch(a, allowFailures);
       });
-      const { failures: failures1 } = store1.mergeOps(
-        store2.ops.slice(lastOp2)
-      );
+      const ops1 = store1.ops.slice(lastOp1);
+      const ops2 = store2.ops.slice(lastOp2);
+      const { failures: failures1 } = store1.mergeOps(ops2);
       if (!allowFailures) {
         expect(failures1).to.eql([], 'failure merging store2 into store1');
       }
-      const { failures: failures2 } = store2.mergeOps(
-        store1.ops.slice(lastOp1)
-      );
+      const { failures: failures2 } = store2.mergeOps(ops1);
       if (!allowFailures) {
         expect(failures2).to.eql([], 'failure merging store1 into store2');
       }
-      lastOp1 = store1.ops.length;
-      lastOp2 = store2.ops.length;
     });
 
-    expect(store2.queryOnce('$')).to.deep.equal(
-      store1.queryOnce('$'),
-      'store JSON state does not match'
+    expect({
+      json: store2.queryOnce('$'),
+      ops: store2.ops,
+      savePoints: store2.savePoints,
+    }).to.deep.equal(
+      {
+        json: store1.queryOnce('$'),
+        ops: store1.ops,
+        savePoints: store1.savePoints,
+      },
+      'stores do not match after merge'
     );
-    expect(store2.ops).to.deep.equal(
-      store1.ops,
-      'store ops list does not match'
-    );
-    expect(store2.savePoints).to.deep.equal(
-      store1.savePoints,
-      'store save point list does not match'
-    );
-    expect(store1.saveState.load().ops).to.deep.equal(
+    expect(store1.saveState.ops()).to.deep.equal(
       store1.ops,
       'save state ops list does not match (store 1)'
     );
-    expect(store1.saveState.load().savePoints).to.deep.equal(
+    expect(store1.saveState.savePoints()).to.deep.equal(
       store1.savePoints,
       'save state save point list does not match (store 1)'
     );
-    expect(store2.saveState.load().ops).to.deep.equal(
+    expect(store2.saveState.ops()).to.deep.equal(
       store2.ops,
       'save state ops list does not match (store 2)'
     );
-    expect(store2.saveState.load().savePoints).to.deep.equal(
+    expect(store2.saveState.savePoints()).to.deep.equal(
       store2.savePoints,
       'save state save point list does not match (store 2)'
     );

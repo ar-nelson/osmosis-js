@@ -1,245 +1,291 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
-import { applyAction } from '../src/actions';
+import { actionToChanges } from '../src/actions';
+import { JsonJsonAdapter } from '../src/json-adapter';
+import { Key, Index, Put, Delete, Touch, Move } from './mock-constructors';
 
 describe('JSON Action', function () {
   describe('Set', function () {
     it('should set a key on the root object', function () {
-      const json = { foo: 1 };
-      const result = applyAction(
-        { action: 'Set', path: ['bar'], payload: 2 },
-        json
-      );
-      expect(json).to.deep.equal({ foo: 1, bar: 2 });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['bar']]);
+      expect(
+        actionToChanges(
+          { action: 'Set', path: [Key('foo')], payload: 2 },
+          { foo: 1 },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Put(['foo'], 2)],
+        failures: [],
+      });
     });
 
     it('should set multi-level paths', function () {
-      const json = { foo: { bar: [{}, {}] } };
-      const result = applyAction(
-        { action: 'Set', path: ['foo', 'bar', 1, 'baz'], payload: 'qux' },
-        json
-      );
-      expect(json).to.deep.equal({ foo: { bar: [{}, { baz: 'qux' }] } });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['foo', 'bar', 1, 'baz']]);
-    });
-
-    it('should overwrite existing object keys', function () {
-      const json = { foo: 1, bar: 2 };
-      const result = applyAction(
-        { action: 'Set', path: ['foo'], payload: 3 },
-        json
-      );
-      expect(json).to.deep.equal({ foo: 3, bar: 2 });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['foo']]);
+      expect(
+        actionToChanges(
+          {
+            action: 'Set',
+            path: [Key('foo'), Key('bar'), Index(1), Key('baz')],
+            payload: 'qux',
+          },
+          { foo: { bar: [{}, {}] } },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Put(['foo', 'bar', 1, 'baz'], 'qux')],
+        failures: [],
+      });
     });
 
     it('should overwrite existing array elements', function () {
-      const json = { foo: [10, 20, 30] };
-      const result = applyAction(
-        { action: 'Set', path: ['foo', 1], payload: 25 },
-        json
-      );
-      expect(json).to.deep.equal({ foo: [10, 25, 30] });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['foo', 1]]);
+      expect(
+        actionToChanges(
+          { action: 'Set', path: [Key('foo'), Index(1)], payload: 25 },
+          { foo: [10, 20, 30] },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Put(['foo', 1], 25)],
+        failures: [],
+      });
     });
 
     it('should add a trailing array element', function () {
-      const json = { foo: [10, 20, 30] };
-      const result = applyAction(
-        { action: 'Set', path: ['foo', 3], payload: 40 },
-        json
-      );
-      expect(json).to.deep.equal({ foo: [10, 20, 30, 40] });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['foo', 3]]);
+      expect(
+        actionToChanges(
+          { action: 'Set', path: [Key('foo'), Index(3)], payload: 40 },
+          { foo: [10, 20, 30] },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Put(['foo', 3], 40)],
+        failures: [],
+      });
+    });
+
+    it('should add an element past the end of an array, inserting nulls in between', function () {
+      expect(
+        actionToChanges(
+          { action: 'Set', path: [Key('foo'), Index(6)], payload: 40 },
+          { foo: [10, 20, 30] },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [
+          Put(['foo', 3], null),
+          Put(['foo', 4], null),
+          Put(['foo', 5], null),
+          Put(['foo', 6], 40),
+        ],
+        failures: [],
+      });
     });
 
     it('should report failure when a path does not exist', function () {
-      const json = { foo: 1, bar: 2 };
-      const result = applyAction(
-        { action: 'Set', path: ['baz', 'qux'], payload: 3 },
-        json
-      );
-      expect(json).to.deep.equal({ foo: 1, bar: 2 });
-      expect(result.failed).to.be.true;
-      expect(result)
-        .to.have.property('failure')
-        .deep.equal({
-          path: ['baz', 'qux'],
-          message: 'path does not exist',
-        });
+      expect(
+        actionToChanges(
+          { action: 'Set', path: [Key('baz'), Key('qux')], payload: 3 },
+          { foo: 1, bar: 2 },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [],
+        failures: [
+          {
+            path: ['baz'],
+            message: 'path does not exist',
+          },
+        ],
+      });
     });
   });
 
   describe('Delete', function () {
     it('should delete a key on the root object', function () {
-      const json = { foo: 1, bar: 2 };
-      const result = applyAction({ action: 'Delete', path: ['bar'] }, json);
-      expect(json).to.deep.equal({ foo: 1 });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['bar']]);
+      expect(
+        actionToChanges(
+          { action: 'Delete', path: [Key('bar')] },
+          { foo: 1, bar: 2 },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Delete(['bar'])],
+        failures: [],
+      });
     });
 
     it('should delete deep object keys', function () {
-      const json = { foo: { bar: { baz: { qux: {} } } } };
-      const result = applyAction(
-        { action: 'Delete', path: ['foo', 'bar', 'baz'] },
-        json
-      );
-      expect(json).to.deep.equal({ foo: { bar: {} } });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['foo', 'bar', 'baz']]);
+      expect(
+        actionToChanges(
+          { action: 'Delete', path: [Key('foo'), Key('bar'), Key('baz')] },
+          { foo: { bar: { baz: { qux: {} } } } },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Delete(['foo', 'bar', 'baz'])],
+        failures: [],
+      });
     });
 
     it('should delete trailing array elements', function () {
-      const json = { foo: [1, 2, 3] };
-      const result = applyAction({ action: 'Delete', path: ['foo', 2] }, json);
-      expect(json).to.deep.equal({ foo: [1, 2] });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['foo', 2]]);
+      expect(
+        actionToChanges(
+          { action: 'Delete', path: [Key('foo'), Index(2)] },
+          { foo: [1, 2, 3] },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Delete(['foo', 2])],
+        failures: [],
+      });
     });
 
     it('should shift remaining array elements to fill a deleted space', function () {
-      const json = { foo: [1, 2, 3, 4] };
-      const result = applyAction({ action: 'Delete', path: ['foo', 1] }, json);
-      expect(json).to.deep.equal({ foo: [1, 3, 4] });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([
-          ['foo', 1],
-          ['foo', 2],
-          ['foo', 3],
-        ]);
+      expect(
+        actionToChanges(
+          { action: 'Delete', path: [Key('foo'), Index(1)] },
+          { foo: [1, 2, 3, 4] },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Move(['foo', 2], ['foo', 1]), Move(['foo', 3], ['foo', 2])],
+        failures: [],
+      });
     });
 
     it('should report failure when a path does not exist', function () {
-      const json = { foo: 1, bar: 2 };
-      const result = applyAction(
-        { action: 'Delete', path: ['baz', 'qux'] },
-        json
-      );
-      expect(json).to.deep.equal({ foo: 1, bar: 2 });
-      expect(result.failed).to.be.true;
-      expect(result)
-        .to.have.property('failure')
-        .deep.equal({
-          path: ['baz', 'qux'],
-          message: 'path does not exist',
-        });
+      expect(
+        actionToChanges(
+          { action: 'Delete', path: [Key('baz'), Key('qux')] },
+          { foo: 1, bar: 2 },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [],
+        failures: [
+          {
+            path: ['baz'],
+            message: 'path does not exist',
+          },
+        ],
+      });
     });
   });
 
   describe('InitArray', function () {
     it('should set a non-array key to []', function () {
-      const json = { foo: {} };
-      const result = applyAction({ action: 'InitArray', path: ['foo'] }, json);
-      expect(json).to.deep.equal({ foo: [] });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['foo']]);
+      expect(
+        actionToChanges(
+          { action: 'InitArray', path: [Key('foo')] },
+          { foo: {} },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Put(['foo'], [])],
+        failures: [],
+      });
     });
 
     it('should set a nonexistent key to []', function () {
-      const json = { foo: 1 };
-      const result = applyAction({ action: 'InitArray', path: ['bar'] }, json);
-      expect(json).to.deep.equal({ foo: 1, bar: [] });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['bar']]);
+      expect(
+        actionToChanges(
+          { action: 'InitArray', path: [Key('bar')] },
+          { foo: 1 },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Put(['bar'], [])],
+        failures: [],
+      });
     });
 
     it('should ignore an existing array', function () {
-      const json = { foo: [1, 2, 3] };
-      const result = applyAction({ action: 'InitArray', path: ['foo'] }, json);
-      expect(json).to.deep.equal({ foo: [1, 2, 3] });
-      expect(result).not.to.have.property('failure');
-      expect(result).to.have.property('changed').be.empty;
+      expect(
+        actionToChanges(
+          { action: 'InitArray', path: [Key('foo')] },
+          { foo: [1, 2, 3] },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Touch(['foo'])],
+        failures: [],
+      });
     });
 
     it('should report failure when a path does not exist', function () {
-      const json = { foo: 1, bar: 2 };
-      const result = applyAction(
-        { action: 'InitArray', path: ['baz', 'qux'] },
-        json
-      );
-      expect(json).to.deep.equal({ foo: 1, bar: 2 });
-      expect(result.failed).to.be.true;
-      expect(result)
-        .to.have.property('failure')
-        .deep.equal({
-          path: ['baz', 'qux'],
-          message: 'path does not exist',
-        });
+      expect(
+        actionToChanges(
+          { action: 'InitArray', path: [Key('baz'), Key('qux')] },
+          { foo: 1, bar: 2 },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [],
+        failures: [
+          {
+            path: ['baz'],
+            message: 'path does not exist',
+          },
+        ],
+      });
     });
   });
 
   describe('InitObject', function () {
     it('should set a non-object key to {}', function () {
-      const json = { foo: [] };
-      const result = applyAction({ action: 'InitObject', path: ['foo'] }, json);
-      expect(json).to.deep.equal({ foo: {} });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['foo']]);
+      expect(
+        actionToChanges(
+          { action: 'InitObject', path: [Key('foo')] },
+          { foo: [] },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Put(['foo'], {})],
+        failures: [],
+      });
     });
 
     it('should set a nonexistent key to {}', function () {
-      const json = { foo: 1 };
-      const result = applyAction({ action: 'InitObject', path: ['bar'] }, json);
-      expect(json).to.deep.equal({ foo: 1, bar: {} });
-      expect(result).not.to.have.property('failure');
-      expect(result)
-        .to.have.property('changed')
-        .deep.equal([['bar']]);
+      expect(
+        actionToChanges(
+          { action: 'InitObject', path: [Key('bar')] },
+          { foo: 1 },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Put(['bar'], {})],
+        failures: [],
+      });
     });
 
     it('should ignore an existing object', function () {
-      const json = { foo: { bar: 'baz' } };
-      const result = applyAction({ action: 'InitObject', path: ['foo'] }, json);
-      expect(json).to.deep.equal({ foo: { bar: 'baz' } });
-      expect(result).not.to.have.property('failure');
-      expect(result).to.have.property('changed').be.empty;
+      expect(
+        actionToChanges(
+          { action: 'InitObject', path: [Key('foo')] },
+          { foo: { bar: 'baz' } },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [Touch(['foo'])],
+        failures: [],
+      });
     });
 
     it('should report failure when a path does not exist', function () {
-      const json = { foo: 1, bar: 2 };
-      const result = applyAction(
-        { action: 'InitObject', path: ['baz', 'qux'] },
-        json
-      );
-      expect(json).to.deep.equal({ foo: 1, bar: 2 });
-      expect(result.failed).to.be.true;
-      expect(result)
-        .to.have.property('failure')
-        .deep.equal({
-          path: ['baz', 'qux'],
-          message: 'path does not exist',
-        });
+      expect(
+        actionToChanges(
+          { action: 'InitObject', path: [Key('baz'), Key('qux')] },
+          { foo: 1, bar: 2 },
+          JsonJsonAdapter
+        )
+      ).to.deep.equal({
+        changes: [],
+        failures: [
+          {
+            path: ['baz'],
+            message: 'path does not exist',
+          },
+        ],
+      });
     });
   });
 });

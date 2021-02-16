@@ -16,10 +16,9 @@ JSON CRDT datastore (`@nels.onl/osmosis-store-js`) and the network stack
 > mobile apps, but, unfortunately, this Node module with native dependencies is
 > not easily usable on mobile.
 >
-> My plan is to develop a portable native implementation in a systems language
-> like C++, Rust, or Zig, and to provide bindings for several languages,
-> including a Node wrapper at `@nels.onl/osmosis`. See the [Roadmap](#roadmap)
-> for more information.
+> My plan is to develop a portable native implementation in C, and to provide
+> bindings for several languages, including a Node wrapper at
+> `@nels.onl/osmosis`. See the [Roadmap](#roadmap) for more information.
 
 ## Rationale
 
@@ -378,8 +377,8 @@ from a database file.
   appear in the UI of other devices when listing peers. Defaults to something
   randomly generated.
 - `persistence`: A string describing how Osmosis data is persisted to disk.
-  Supported values are `'none'` (default), `'json'`, and `'sqlite'`. More values
-  may be added in the future.
+  Supported values are `'none'` (default), `'json'`, `'sqlite'`, and
+  `'leveldb'`. More values may be added in the future.
 - `filename`: The file to save Osmosis data to. Will be read immediately, then
   written continually whenever the Osmosis state is changed. Required if
   `persistence` is not `'none'`.
@@ -635,16 +634,15 @@ if they share the same `appId`.
 - [ ] RxJS wrapper library
 - [ ] Sample app
 - [ ] [Chronofold][chronofold]-like string actions
+- [ ] LevelDB support
 - [ ] SQLite support
-- [ ] Run without keeping entire DB in memory
 - [ ] Blobs and blob actions
 - [ ] Standalone database app
-- [ ] Port to a systems language (C++, Rust, Zig)
+- [ ] Port to C
 - [ ] More language bindings:
   - [ ] Node
   - [ ] Cordova plugin
   - [ ] Java (+ Android)
-  - [ ] C (+ iOS)
   - [ ] Python
   - [ ] Go
 - [ ] At-rest encryption support
@@ -656,7 +654,7 @@ if they share the same `appId`.
 
 ## License
 
-Copyright &copy; 2020 Adam Nelson
+Copyright &copy; 2020-2021 Adam Nelson
 
 Osmosis is distributed under the [Blue Oak Model License][blue-oak]. It is
 a MIT/BSD-style license, but with [some clarifying improvements][why-blue-oak]

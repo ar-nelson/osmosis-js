@@ -1,8 +1,9 @@
 import { readFileSync, statSync, writeFile } from 'fs';
-import produce, { Draft } from 'immer';
-import * as uuid from 'uuid';
-import { Id, idIndex, Uuid } from './id';
-import { Op, SavePoint, SaveState } from './store';
+import InMemorySaveState, { State } from './in-memory-save-state';
+import { Failure, JsonObject } from './types';
+import { Op } from './save-state';
+import { Change } from './actions';
+import { Id } from './id';
 
 enum WriteState {
   Idle,
@@ -10,42 +11,58 @@ enum WriteState {
   Writing,
 }
 
-interface SaveFile {
-  readonly uuid: Uuid;
-  readonly ops: readonly Op[];
-  readonly savePoints: readonly SavePoint[];
+function readJsonFile(filename: string): any {
+  try {
+    const json = JSON.parse(readFileSync(filename, { encoding: 'utf8' }));
+    return {
+      ...json,
+      hash: Buffer.from(json.hash, 'hex'),
+      savePoints: json.savePoints.map((sp) => ({
+        ...sp,
+        hash: Buffer.from(sp.hash, 'hex'),
+      })),
+    };
+  } catch (e) {
+    return undefined;
+  }
 }
 
-export default class JsonFileSaveState implements SaveState {
-  private writeState: WriteState = WriteState.Idle;
-  private saveFile: SaveFile;
+function stateToJson(state: State<unknown>): JsonObject {
+  return ({
+    ...state,
+    hash: Buffer.from(state.hash).toString('hex'),
+    savePoints: state.savePoints.map((sp) => ({
+      ...sp,
+      hash: Buffer.from(sp.hash).toString('hex'),
+    })),
+  } as unknown) as JsonObject;
+}
 
-  constructor(public readonly filename: string) {
+export default class JsonFileSaveState<
+  Metadata extends { readonly [key: string]: string }
+> extends InMemorySaveState<Metadata> {
+  private writeState: WriteState = WriteState.Idle;
+
+  constructor(
+    initMetadata: () => Metadata,
+    public readonly filename = 'osmosis.json'
+  ) {
+    super(readJsonFile(filename) || { metadata: initMetadata() });
+
     const stat = statSync(filename);
     if (stat.isDirectory()) {
       throw new Error(
         `cannot write JSON file at path "${filename}" because it is a directory`
       );
     }
-    try {
-      if (!stat.isFile) {
-        throw true;
-      }
-      const json = readFileSync(filename, { encoding: 'utf8' });
-      this.saveFile = JSON.parse(json);
-    } catch (e) {
-      this.saveFile = {
-        uuid: uuid.v4(),
-        ops: [],
-        savePoints: [],
-      };
+    if (!stat.isFile()) {
       this.scheduleWrite();
     }
   }
 
   private performWrite() {
     this.writeState = WriteState.Writing;
-    writeFile(this.filename, JSON.stringify(this.saveFile), (err) => {
+    writeFile(this.filename, JSON.stringify(stateToJson(this.state)), (err) => {
       if (err) {
         console.error(err);
       }
@@ -67,41 +84,23 @@ export default class JsonFileSaveState implements SaveState {
     }
   }
 
-  load(): SaveFile {
-    return this.saveFile;
+  insert(
+    ops: Op[]
+  ): {
+    changes: readonly Change[];
+    failures: readonly Failure[];
+  } {
+    this.scheduleWrite();
+    return super.insert(ops);
   }
 
-  addOp(op: Op): void {
-    this.saveFile = produce(this.saveFile, ({ ops }) => {
-      ops.push(op as Draft<Op>);
-    });
+  rewind(latestId: Id): readonly Op[] {
     this.scheduleWrite();
+    return super.rewind(latestId);
   }
 
-  addSavePoint(savePoint: SavePoint): void {
-    this.saveFile = produce(this.saveFile, ({ savePoints }) => {
-      savePoints.push(savePoint as any);
-    });
+  setMetadata(metadata: Metadata): void {
     this.scheduleWrite();
-  }
-
-  deleteSavePoint(at: Id): void {
-    this.saveFile = produce(this.saveFile, ({ savePoints }) => {
-      const i = idIndex(at, savePoints);
-      if (i > 0) {
-        savePoints.splice(i, 1);
-      }
-    });
-    this.scheduleWrite();
-  }
-
-  deleteEverythingAfter(exclusiveLowerBound: Id): void {
-    this.saveFile = produce(this.saveFile, ({ savePoints, ops }) => {
-      const i = idIndex(exclusiveLowerBound, savePoints);
-      savePoints.splice(i, savePoints.length - i);
-      const j = idIndex(exclusiveLowerBound, ops);
-      ops.splice(j, ops.length - j);
-    });
-    this.scheduleWrite();
+    return super.setMetadata(metadata);
   }
 }

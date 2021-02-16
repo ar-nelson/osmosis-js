@@ -1,16 +1,16 @@
-import { Draft } from 'immer';
 import flatMap from 'lodash.flatmap';
 import isEqual from 'lodash.isequal';
-import isPlainObject from 'lodash.isplainobject';
 import nearley from 'nearley';
 import { Action, mapAction, ScalarAction } from './actions';
 import { Id } from './id';
+import {
+  JsonAdapter,
+  JsonAdapterResult,
+  PlusScalarAdapter,
+  followPath,
+} from './json-adapter';
 import grammar from './jsonpath.grammar';
-import { Failure, Json, JsonObject, PathArray } from './types';
-
-const isObject: (
-  json: Draft<Json>
-) => json is Draft<JsonObject> = isPlainObject as any;
+import { Failure, Json, JsonScalar, PathArray } from './types';
 
 export type JsonPath = string;
 
@@ -143,7 +143,7 @@ export type BinaryExpr = readonly [
 
 export type IfExpr = readonly ['if', JsonPathExpr, JsonPathExpr, JsonPathExpr];
 
-export type LiteralExpr = readonly ['literal', Json];
+export type LiteralExpr = readonly ['literal', JsonScalar];
 
 export class ExprError extends Error {
   constructor(message: string) {
@@ -151,132 +151,150 @@ export class ExprError extends Error {
   }
 }
 
-function expectNumber(op: string, json: Json): number {
-  if (typeof json !== 'number') {
-    throw new ExprError(`${op}: expected number, got ${JSON.stringify(json)}`);
+export function evalJsonPathExpr<T>(
+  self: T,
+  adapter: PlusScalarAdapter<T>,
+  expr: JsonPathExpr
+): JsonScalar | T {
+  function expectNumber(op: string, json: JsonScalar | T): number {
+    const n = adapter.numberValue(json);
+    if (n == null) {
+      throw new ExprError(
+        `${op}: expected number, got ${JSON.stringify(adapter.toJson(json))}`
+      );
+    }
+    return n;
   }
-  return json;
-}
 
-export function evalJsonPathExpr(self: Json, expr: JsonPathExpr): Json {
   switch (expr[0]) {
     case 'literal':
       return expr[1];
     case 'self':
       return self;
     case 'subscript': {
-      const parent = evalJsonPathExpr(self, expr[1]);
-      const key = evalJsonPathExpr(self, expr[2]);
-      let result: Json | undefined = undefined;
-      if (typeof key === 'number') {
-        if (!Array.isArray(parent)) {
-          throw new ExprError(
-            `subscript: ${JSON.stringify(
-              key
-            )} is not a valid index for non-array value ${JSON.stringify(
-              parent
-            )}`
-          );
-        }
-        result = parent[key];
-      } else if (typeof key === 'string') {
-        if (!isObject(parent)) {
-          throw new ExprError(
-            `subscript: ${JSON.stringify(
-              key
-            )} is not a valid key for non-object value ${JSON.stringify(
-              parent
-            )}`
-          );
-        }
-        result = parent[key];
+      const parent = evalJsonPathExpr(self, adapter, expr[1]);
+      const subscript = evalJsonPathExpr(self, adapter, expr[2]);
+      let result: JsonAdapterResult<JsonScalar | T> | undefined = undefined;
+      const index = adapter.numberValue(subscript);
+      if (index) {
+        result = adapter.getIndex(self, index);
       } else {
+        const key = adapter.stringValue(subscript);
+        if (key) {
+          result = adapter.getKey(self, key);
+        }
+      }
+      if (!result) {
         throw new ExprError(
-          `subscript: ${JSON.stringify(key)} is not a valid index or key`
+          `subscript: ${JSON.stringify(
+            adapter.toJson(subscript)
+          )} is not a valid index or key`
+        );
+      } else if (!result.canExist) {
+        // FIXME: It's dangerous to stringify a potentially huge object like this
+        throw new ExprError(
+          `subscript: ${JSON.stringify(
+            adapter.toJson(subscript)
+          )} is not a valid index for non-array value ${JSON.stringify(
+            adapter.toJson(parent)
+          )}`
+        );
+      } else if (!result.exists) {
+        throw new ExprError(
+          `subscript: element ${JSON.stringify(
+            adapter.toJson(subscript)
+          )} does not exist`
         );
       }
-      if (result === undefined) {
-        throw new ExprError(
-          `subscript: element ${JSON.stringify(key)} does not exist`
-        );
-      }
-      return result;
+      return result.value as JsonScalar | T;
     }
     case 'neg':
-      return -expectNumber('-', evalJsonPathExpr(self, expr[1]));
+      return -expectNumber('-', evalJsonPathExpr(self, adapter, expr[1]));
     case '!':
-      return !evalJsonPathExpr(self, expr[1]);
+      return !evalJsonPathExpr(self, adapter, expr[1]);
     case '+':
       return (
-        expectNumber('+', evalJsonPathExpr(self, expr[1])) +
-        expectNumber('+', evalJsonPathExpr(self, expr[2]))
+        expectNumber('+', evalJsonPathExpr(self, adapter, expr[1])) +
+        expectNumber('+', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '-':
       return (
-        expectNumber('-', evalJsonPathExpr(self, expr[1])) -
-        expectNumber('-', evalJsonPathExpr(self, expr[2]))
+        expectNumber('-', evalJsonPathExpr(self, adapter, expr[1])) -
+        expectNumber('-', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '*':
       return (
-        expectNumber('*', evalJsonPathExpr(self, expr[1])) *
-        expectNumber('*', evalJsonPathExpr(self, expr[2]))
+        expectNumber('*', evalJsonPathExpr(self, adapter, expr[1])) *
+        expectNumber('*', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '/':
       return (
-        expectNumber('/', evalJsonPathExpr(self, expr[1])) /
-        expectNumber('/', evalJsonPathExpr(self, expr[2]))
+        expectNumber('/', evalJsonPathExpr(self, adapter, expr[1])) /
+        expectNumber('/', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '%':
       return (
-        expectNumber('%', evalJsonPathExpr(self, expr[1])) %
-        expectNumber('%', evalJsonPathExpr(self, expr[2]))
+        expectNumber('%', evalJsonPathExpr(self, adapter, expr[1])) %
+        expectNumber('%', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '<':
       return (
-        expectNumber('<', evalJsonPathExpr(self, expr[1])) <
-        expectNumber('<', evalJsonPathExpr(self, expr[2]))
+        expectNumber('<', evalJsonPathExpr(self, adapter, expr[1])) <
+        expectNumber('<', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '<=':
       return (
-        expectNumber('<=', evalJsonPathExpr(self, expr[1])) <=
-        expectNumber('<=', evalJsonPathExpr(self, expr[2]))
+        expectNumber('<=', evalJsonPathExpr(self, adapter, expr[1])) <=
+        expectNumber('<=', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '>':
       return (
-        expectNumber('>', evalJsonPathExpr(self, expr[1])) >
-        expectNumber('>', evalJsonPathExpr(self, expr[2]))
+        expectNumber('>', evalJsonPathExpr(self, adapter, expr[1])) >
+        expectNumber('>', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '>=':
       return (
-        expectNumber('>=', evalJsonPathExpr(self, expr[1])) >=
-        expectNumber('>=', evalJsonPathExpr(self, expr[2]))
+        expectNumber('>=', evalJsonPathExpr(self, adapter, expr[1])) >=
+        expectNumber('>=', evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '==':
       return isEqual(
-        evalJsonPathExpr(self, expr[1]),
-        evalJsonPathExpr(self, expr[2])
+        adapter.toJson(evalJsonPathExpr(self, adapter, expr[1])),
+        adapter.toJson(evalJsonPathExpr(self, adapter, expr[2]))
       );
     case '!=':
       return !isEqual(
-        evalJsonPathExpr(self, expr[1]),
-        evalJsonPathExpr(self, expr[2])
+        adapter.toJson(evalJsonPathExpr(self, adapter, expr[1])),
+        adapter.toJson(evalJsonPathExpr(self, adapter, expr[2]))
       );
-    case '&&':
-      return evalJsonPathExpr(self, expr[1]) && evalJsonPathExpr(self, expr[2]);
-    case '||':
-      return evalJsonPathExpr(self, expr[1]) || evalJsonPathExpr(self, expr[2]);
+    case '&&': {
+      const first = evalJsonPathExpr(self, adapter, expr[1]);
+      return adapter.booleanValue(first)
+        ? evalJsonPathExpr(self, adapter, expr[2])
+        : first;
+    }
+    case '||': {
+      const first = evalJsonPathExpr(self, adapter, expr[1]);
+      return adapter.booleanValue(first)
+        ? first
+        : evalJsonPathExpr(self, adapter, expr[2]);
+    }
     case 'if':
-      return evalJsonPathExpr(self, expr[1])
-        ? evalJsonPathExpr(self, expr[2])
-        : evalJsonPathExpr(self, expr[3]);
+      return adapter.booleanValue(evalJsonPathExpr(self, adapter, expr[1]))
+        ? evalJsonPathExpr(self, adapter, expr[2])
+        : evalJsonPathExpr(self, adapter, expr[3]);
     default:
       throw new ExprError(`not an expression: ${expr[0]}`);
   }
 }
 
-function adjustIndex(index: number, array: readonly any[]): number {
+function adjustIndex<T>(
+  index: number,
+  array: T,
+  adapter: JsonAdapter<T>
+): number {
   let i = Math.floor(index);
-  const len = array.length;
+  const len = adapter.arrayLength(array) || 0;
   if (len > 0) {
     while (i < 0) {
       i += len;
@@ -285,8 +303,9 @@ function adjustIndex(index: number, array: readonly any[]): number {
   return i;
 }
 
-function queryPaths1(
-  json: Json,
+function queryPaths1<T>(
+  json: T,
+  adapter: JsonAdapter<T>,
   segment: JsonPathSegment
 ): {
   existing: PathArray[];
@@ -295,122 +314,77 @@ function queryPaths1(
 } {
   let existing: PathArray[] = [];
   const potential: PathArray[] = [];
-  let failures: Failure[] = [];
+  const failures: Failure[] = [];
+  function pushOne(
+    index: string | number,
+    { canExist, exists }: JsonAdapterResult<T>
+  ) {
+    if (canExist) {
+      (exists ? existing : potential).push([index]);
+    } else {
+      failures.push({
+        path: [index],
+        message: 'path does not exist',
+      });
+    }
+  }
   switch (segment.type) {
     case 'Wildcard':
-      if (Array.isArray(json)) {
-        existing = json.map((x, i) => [i]);
-      } else if (isObject(json)) {
-        existing = Object.keys(json).map((x) => [x]);
-      }
+      existing = adapter.listEntries(json)?.map(([k]) => [k]) || [];
       break;
     case 'Key':
-      if (isObject(json)) {
-        if (Object.prototype.hasOwnProperty.call(json, segment.query)) {
-          existing.push([segment.query]);
-        } else {
-          potential.push([segment.query]);
-        }
-      } else {
-        failures.push({
-          path: [segment.query],
-          message: 'path does not exist',
-        });
-      }
+      pushOne(segment.query, adapter.getKey(json, segment.query));
       break;
     case 'Index':
-      if (Array.isArray(json)) {
-        if (segment.query < json.length) {
-          existing.push([adjustIndex(segment.query, json)]);
-        } else {
-          potential.push([segment.query]);
-        }
-      } else {
-        failures.push({
-          path: [segment.query],
-          message: 'path does not exist',
-        });
-      }
+      pushOne(
+        segment.query,
+        adapter.getIndex(json, adjustIndex(segment.query, json, adapter))
+      );
       break;
     case 'MultiKey':
-      if (isObject(json)) {
-        segment.query.forEach((key) => {
-          if (Object.prototype.hasOwnProperty.call(json, key)) {
-            existing.push([key]);
-          } else {
-            potential.push([key]);
-          }
-        });
-      } else {
-        failures = segment.query.map((x) => ({
-          path: [x],
-          message: 'path does not exist',
-        }));
+      for (const key of segment.query) {
+        pushOne(key, adapter.getKey(json, key));
       }
       break;
     case 'MultiIndex':
-      if (Array.isArray(json)) {
-        segment.query.forEach((key) => {
-          if (key < json.length) {
-            existing.push([adjustIndex(key, json)]);
-          } else {
-            potential.push([key]);
-          }
-        });
-      } else {
-        failures = segment.query.map((x) => ({
-          path: [x],
-          message: 'path does not exist',
-        }));
+      for (const index of segment.query) {
+        pushOne(
+          index,
+          adapter.getIndex(json, adjustIndex(index, json, adapter))
+        );
       }
       break;
     case 'ExprIndex':
-      segment.query.forEach((expr) => {
-        let key: Json;
+      for (const expr of segment.query) {
+        let key: JsonScalar | T;
         try {
-          key = evalJsonPathExpr(json, expr);
+          key = evalJsonPathExpr(json, new PlusScalarAdapter(adapter), expr);
         } catch (e) {
           failures.push({
             path: [],
             message: `[JsonPath expression] ${e?.message || e}`,
           });
-          return;
+          break;
         }
-        if (typeof key === 'string') {
-          if (isObject(json)) {
-            if (Object.prototype.hasOwnProperty.call(json, key)) {
-              existing.push([key]);
-            } else {
-              potential.push([key]);
-            }
-          } else {
+        switch (typeof key) {
+          case 'string':
+            pushOne(key, adapter.getKey(json, key));
+            break;
+          case 'number':
+            pushOne(
+              key,
+              adapter.getIndex(json, adjustIndex(key, json, adapter))
+            );
+            break;
+          default:
             failures.push({
-              path: [key],
-              message: 'path does not exist',
+              path: [],
+              message: `[JsonPath expression] subscript: ${JSON.stringify(
+                key
+              )} is not a valid index or key`,
             });
-          }
-        } else if (typeof key === 'number') {
-          if (Array.isArray(json)) {
-            if (key < json.length) {
-              existing.push([adjustIndex(key, json)]);
-            } else {
-              potential.push([key]);
-            }
-          } else {
-            failures.push({
-              path: [key],
-              message: 'path does not exist',
-            });
-          }
-        } else {
-          failures.push({
-            path: [],
-            message: `[JsonPath expression] subscript: ${JSON.stringify(
-              key
-            )} is not a valid index or key`,
-          });
         }
-      });
+      }
       break;
     case 'Slice':
       if (Array.isArray(json)) {
@@ -422,8 +396,8 @@ function queryPaths1(
           });
           break;
         }
-        const start = adjustIndex(step > 0 ? from : to, json);
-        const end = adjustIndex(step > 0 ? to : from, json);
+        const start = adjustIndex(step > 0 ? from : to, json, adapter);
+        const end = adjustIndex(step > 0 ? to : from, json, adapter);
         for (let i = start; i < end; i += step) {
           if (i < json.length) {
             existing.push([i]);
@@ -438,29 +412,28 @@ function queryPaths1(
         });
       }
       break;
-    case 'ExprSlice':
-      if (Array.isArray(json)) {
-        let from = 0;
-        let to = json.length;
-        let step = 1;
+    case 'ExprSlice': {
+      const length = adapter.arrayLength(json);
+      if (length != null) {
+        let from: number, to: number, step: number;
         try {
-          if (segment.query.from) {
-            from = expectNumber(
-              'slice',
-              evalJsonPathExpr(json, segment.query.from)
-            );
+          // eslint-disable-next-line no-inner-declarations
+          function expectNumberExpr(expr) {
+            const plusAdapter = new PlusScalarAdapter(adapter);
+            const evald = evalJsonPathExpr(json, plusAdapter, expr);
+            const n = plusAdapter.numberValue(evald);
+            if (n == null) {
+              throw new ExprError(
+                `slice: expected number, got ${JSON.stringify(
+                  plusAdapter.toJson(evald)
+                )}`
+              );
+            }
+            return n;
           }
-          if (segment.query.to) {
-            to = expectNumber(
-              'slice',
-              evalJsonPathExpr(json, segment.query.to)
-            );
-          }
-          if (segment.query.step) {
-            step = Math.floor(
-              expectNumber('slice', evalJsonPathExpr(json, segment.query.step))
-            );
-          }
+          from = segment.query.from ? expectNumberExpr(segment.query.from) : 0;
+          to = segment.query.to ? expectNumberExpr(segment.query.to) : length;
+          step = segment.query.step ? expectNumberExpr(segment.query.step) : 1;
         } catch (e) {
           failures.push({
             path: [],
@@ -475,10 +448,10 @@ function queryPaths1(
           });
           break;
         }
-        const start = adjustIndex(step > 0 ? from : to, json);
-        const end = adjustIndex(step > 0 ? to : from, json);
+        const start = adjustIndex(step > 0 ? from : to, json, adapter);
+        const end = adjustIndex(step > 0 ? to : from, json, adapter);
         for (let i = start; i < end; i += step) {
-          if (i < json.length) {
+          if (i < length) {
             existing.push([i]);
           } else {
             potential.push([i]);
@@ -491,33 +464,27 @@ function queryPaths1(
         });
       }
       break;
-    case 'Filter':
-      if (Array.isArray(json)) {
-        json.forEach((x, i) => {
+    }
+    case 'Filter': {
+      const entries = adapter.listEntries(json);
+      if (entries != null) {
+        const plusAdapter = new PlusScalarAdapter(adapter);
+        for (const [key, value] of entries) {
           try {
-            if (evalJsonPathExpr(x, segment.query)) {
-              existing.push([i]);
+            if (
+              plusAdapter.booleanValue(
+                evalJsonPathExpr(value, plusAdapter, segment.query)
+              )
+            ) {
+              existing.push([key]);
             }
           } catch (e) {
             failures.push({
-              path: [i],
+              path: [key],
               message: `[JsonPath expression] ${e?.message || e}`,
             });
           }
-        });
-      } else if (isObject(json)) {
-        Object.entries(json).forEach(([k, v]) => {
-          try {
-            if (evalJsonPathExpr(v, segment.query)) {
-              existing.push([k]);
-            }
-          } catch (e) {
-            failures.push({
-              path: [k],
-              message: `[JsonPath expression] ${e?.message || e}`,
-            });
-          }
-        });
+        }
       } else {
         failures.push({
           path: [],
@@ -525,47 +492,97 @@ function queryPaths1(
         });
       }
       break;
+    }
     case 'Recursive':
-      if (Array.isArray(json)) {
-        existing.push(
-          ...queryPaths(json, segment.query).existing,
-          ...flatMap(json, (x, i) =>
-            queryPaths1(x, segment).existing.map((p) => [i, ...p])
-          )
-        );
-      } else if (isObject(json)) {
-        existing.push(
-          ...queryPaths(json, segment.query).existing,
-          ...flatMap(Object.entries(json), ([k, v]) =>
-            queryPaths1(v, segment).existing.map((p) => [k, ...p])
-          )
-        );
-      }
+      existing.push(
+        ...queryPaths(segment.query, json, adapter).existing,
+        ...flatMap(adapter.listEntries(json) || [], ([key, value]) =>
+          queryPaths1(value, adapter, segment).existing.map((p) => [key, ...p])
+        )
+      );
   }
   return { existing, potential, failures };
 }
 
-function queryValues1(json: Json, segment: JsonPathSegment): Json[] {
-  return queryPaths1(json, segment)
-    .existing.map((p) => p.reduce((j, i) => j?.[i], json))
-    .filter((x) => x !== undefined);
+function queryValues1<T>(
+  segment: JsonPathSegment,
+  json: T,
+  adapter: JsonAdapter<T>
+): T[] {
+  return queryPaths1(json, adapter, segment)
+    .existing.map((p) => followPath(p, json, adapter))
+    .filter((r) => r.found)
+    .map((r) => r.value as T);
 }
 
-export function queryPaths(
-  json: Json,
-  jsonPath: CompiledJsonPath
+export function queryPaths<T>(
+  jsonPath: CompiledJsonPath,
+  json: T,
+  adapter: JsonAdapter<T>
+): {
+  existing: PathArray[];
+  potential: PathArray[];
+  failures: Failure[];
+};
+
+export function queryPaths<T>(
+  jsonPath: CompiledJsonPath | CompiledJsonIdPath,
+  json: T,
+  adapter: JsonAdapter<T>,
+  idToPath: (id: Id) => PathArray | undefined
+): {
+  existing: PathArray[];
+  potential: PathArray[];
+  failures: Failure[];
+};
+
+export function queryPaths<T>(
+  jsonPath: CompiledJsonPath | CompiledJsonIdPath,
+  json: T,
+  adapter: JsonAdapter<T>,
+  idToPath: (id: Id) => PathArray | undefined = () => undefined
 ): {
   existing: PathArray[];
   potential: PathArray[];
   failures: Failure[];
 } {
+  if (jsonPath.length && jsonPath[0].type === 'Id') {
+    const idPath = idToPath(jsonPath[0].query.id) || jsonPath[0].query.path;
+    const { found, value } = followPath(idPath, json, adapter);
+    if (found) {
+      const { potential, failures, existing } = queryPaths(
+        jsonPath.slice(1) as CompiledJsonPath,
+        value as T,
+        adapter
+      );
+      return {
+        existing: existing.map((p) => [...idPath, ...p]),
+        potential: potential.map((p) => [...idPath, ...p]),
+        failures: failures.map((f) => ({
+          ...f,
+          path: [...idPath, ...f.path],
+        })),
+      };
+    } else {
+      return {
+        existing: [],
+        potential: [],
+        failures: [
+          {
+            path: idPath,
+            message: 'path does not exist',
+          },
+        ],
+      };
+    }
+  }
   const potential: PathArray[] = [];
   const failures: Failure[] = [];
-  const existing = jsonPath
-    .reduce<{ json: Json; path: PathArray }[]>(
+  const existing = (jsonPath as CompiledJsonPath)
+    .reduce<{ json: T; path: PathArray }[]>(
       (paths, segment, i) =>
         flatMap(paths, ({ json, path }) => {
-          const result = queryPaths1(json, segment);
+          const result = queryPaths1(json, adapter, segment);
           failures.push(
             ...result.failures.map((f) => ({
               ...f,
@@ -593,11 +610,46 @@ export function queryPaths(
   return { existing, potential, failures };
 }
 
-export function queryValues(json: Json, path: CompiledJsonPath): Json[] {
+export function queryValues<T>(
+  path: CompiledJsonPath,
+  json: T,
+  adapter: JsonAdapter<T>
+): T[] {
   return path.reduce(
-    (jsons, segment) => flatMap(jsons, (json) => queryValues1(json, segment)),
+    (jsons, segment) =>
+      flatMap(jsons, (json) => queryValues1(segment, json, adapter)),
     [json]
   );
+}
+
+export function canMatchAbsolutePath(
+  queryPath: CompiledJsonPath,
+  absolutePath: PathArray
+): boolean {
+  const length = Math.min(queryPath.length, absolutePath.length);
+  for (let i = 0; i < length; i++) {
+    const segment = queryPath[i];
+    switch (segment.type) {
+      case 'Index':
+      case 'Key':
+        if (segment.query !== absolutePath[i]) {
+          return false;
+        }
+        break;
+      case 'MultiIndex':
+      case 'MultiKey':
+        if (
+          (segment.query as readonly (string | number)[]).every(
+            (k) => k !== absolutePath[i]
+          )
+        ) {
+          return false;
+        }
+        break;
+      // TODO: Handle Recursive segments
+    }
+  }
+  return true;
 }
 
 export function isSingularPath(
@@ -605,8 +657,8 @@ export function isSingularPath(
 ): boolean {
   return path.every((p: JsonPathSegment | IdSegment) => {
     switch (p.type) {
-      case 'Key':
       case 'Index':
+      case 'Key':
       case 'Id':
         return true;
       case 'MultiIndex':
@@ -809,4 +861,115 @@ export function compileJsonPathAction(
     };
   }
   return mapAction(action, (p) => compileJsonPath(p, action.vars));
+}
+
+function exprToString(expr: JsonPathExpr, parens = true): string {
+  switch (expr[0]) {
+    case 'self':
+      return '@';
+    case 'literal':
+      return JSON.stringify(expr[1]);
+    case 'neg':
+      return `-${exprToString(expr[1])}`;
+    case '!':
+      return `!${exprToString(expr[1])}`;
+    case 'if': {
+      const str = `${exprToString(expr[1], false)} ? ${exprToString(
+        expr[2],
+        false
+      )} : ${exprToString(expr[3], false)}`;
+      return parens ? `(${str})` : str;
+    }
+    case 'subscript':
+      return `${exprToString(expr[1])}[${(exprToString(expr[2]), false)}]`;
+    default: {
+      const str = `${exprToString(expr[1])} ${expr[0]} ${exprToString(
+        expr[2]
+      )}`;
+      return parens ? `(${str})` : str;
+    }
+  }
+}
+
+function topLevelExprToString(expr: JsonPathExpr): string {
+  if (expr[0] === 'literal') {
+    if (typeof expr[1] === 'string' || typeof expr[1] === 'number') {
+      return JSON.stringify(expr[1]);
+    }
+  }
+  return `(${exprToString(expr, false)})`;
+}
+
+export function jsonPathToString(
+  path: CompiledJsonIdPath | CompiledJsonPath
+): JsonPath {
+  let str = '$';
+  let segments = [...path];
+  let next: JsonPathSegment | IdSegment | undefined;
+  while ((next = segments.shift()) != null) {
+    switch (next.type) {
+      case 'Wildcard':
+        str += '.*';
+        break;
+      case 'Key':
+        if (/^[a-z_]\w+$/i.test(next.query)) {
+          str += `.${next.query}`;
+          break;
+        }
+      // fallthrough
+      case 'Index':
+        str += `[${JSON.stringify(next.query)}]`;
+        break;
+      case 'MultiKey':
+      case 'MultiIndex':
+        str += `[${(next.query as [unknown, ...unknown[]])
+          .map((i) => JSON.stringify(i))
+          .join(', ')}]`;
+        break;
+      case 'ExprIndex':
+        str += `[${next.query.map(topLevelExprToString).join(', ')}]`;
+        break;
+      case 'Slice':
+        str += `[${next.query.from ?? ''}:${next.query.to ?? ''}:${
+          next.query.step ?? ''
+        }]`;
+        break;
+      case 'ExprSlice':
+        str += `[${
+          next.query.from ? topLevelExprToString(next.query.from) : ''
+        }:${next.query.to ? topLevelExprToString(next.query.to) : ''}:${
+          next.query.step ? topLevelExprToString(next.query.step) : ''
+        }]`;
+        break;
+      case 'Filter':
+        str += `[?{${exprToString(next.query, false)})]`;
+        break;
+      case 'Recursive': {
+        const first = next.query[0];
+        if (first.type === 'Wildcard') {
+          str += '..*';
+          segments = next.query.slice(1);
+        } else if (first.type === 'Key' && /^[a-z_]\w+$/i.test(first.query)) {
+          str += `..${first.query}`;
+          segments = next.query.slice(1);
+        } else {
+          str += '..';
+          segments = [...next.query];
+        }
+        break;
+      }
+      case 'Id':
+        segments = [
+          ...next.query.path.map(
+            (query) =>
+              ({
+                type: typeof query === 'number' ? 'Index' : 'Key',
+                query,
+              } as JsonPathSegment)
+          ),
+          ...segments,
+        ];
+    }
+  }
+  return str;
 }

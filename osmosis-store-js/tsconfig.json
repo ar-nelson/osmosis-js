@@ -4,6 +4,7 @@
     "lib": ["ESNext"],
     "module": "commonjs",
     "outDir": "./dist",
+    "downlevelIteration": true,
     "emitDeclarationOnly": true,
     "esModuleInterop": true,
     "strictNullChecks": true,

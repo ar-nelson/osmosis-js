@@ -1,6 +1,8 @@
 import { Id } from './id';
 
-export type Json = null | boolean | number | string | JsonArray | JsonObject;
+export type Json = JsonScalar | JsonArray | JsonObject;
+
+export type JsonScalar = null | boolean | number | string;
 
 export interface JsonArray extends ReadonlyArray<Json> {}
 
@@ -10,12 +12,14 @@ export interface JsonObject {
 
 export type PathArray = ReadonlyArray<string | number>;
 
+export type AbsolutePathArray = readonly [string, ...PathArray];
+
 export interface Cancelable {
   cancel(): void;
 }
 
 export interface Failure {
-  path: PathArray;
+  path: PathArray | string;
   message: string;
   id?: Id;
 }
