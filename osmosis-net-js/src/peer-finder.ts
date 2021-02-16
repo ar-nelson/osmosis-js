@@ -4,12 +4,19 @@ import * as dgram from 'dgram';
 import { EventEmitter } from 'events';
 import { promisify } from 'util';
 import * as uuid from 'uuid';
-import * as proto from './osmosis_pb';
 import { MAX_PEER_NAME_LENGTH, PeerConfig } from './peer-config';
 import { binaryEqual, UUID_LENGTH } from './utils';
+import { KEY_BYTES } from 'monocypher-wasm';
 
 // Magic number to identify broadcast messages: 05-M-05-15
 const MAGIC = Uint8Array.of(0x05, 0x4d, 0x05, 0x15);
+
+const OFFSET_APP_ID = MAGIC.byteLength;
+const OFFSET_PEER_ID = OFFSET_APP_ID + UUID_LENGTH;
+const OFFSET_PUBLIC_KEY = OFFSET_PEER_ID + UUID_LENGTH;
+const OFFSET_PORT = OFFSET_PUBLIC_KEY + KEY_BYTES;
+const OFFSET_PEER_NAME_LENGTH = OFFSET_PORT + 2;
+const OFFSET_PEER_NAME = OFFSET_PEER_NAME_LENGTH + 1;
 
 export const HEARTBEAT_DELAY = 60 * 1000; // 1 minute
 
@@ -30,23 +37,29 @@ interface FaultyInterface {
   expiresAt: Date;
 }
 
-function heartbeatPacket(
-  config: PeerConfig,
-  ifa: HeartbeatInterface,
-  gatewayPort: number
-): Uint8Array {
-  const heartbeat = new proto.Heartbeat();
-  heartbeat.setAppid(uuid.parse(config.appId) as Uint8Array);
-  heartbeat.setPeerid(uuid.parse(config.peerId) as Uint8Array);
-  heartbeat.setPeername(config.peerName);
-  heartbeat.setPort(gatewayPort);
-  heartbeat.setPublickey(config.publicKey);
+export interface Heartbeat {
+  readonly appId: string;
+  readonly peerId: string;
+  readonly publicKey: Buffer;
+  readonly port: number;
+  readonly peerName: string;
+}
 
-  const unprefixed = heartbeat.serializeBinary();
-  const prefixed = new Uint8Array(unprefixed.byteLength + MAGIC.byteLength);
-  prefixed.set(MAGIC, 0);
-  prefixed.set(unprefixed, MAGIC.byteLength);
-  return prefixed;
+function heartbeatPacket(config: PeerConfig, gatewayPort: number): Uint8Array {
+  const peerNameBinary = Buffer.from(config.peerName, 'utf8').slice(
+    0,
+    MAX_PEER_NAME_LENGTH
+  );
+  const heartbeatBytes = OFFSET_PEER_NAME + peerNameBinary.byteLength;
+  const heartbeat = Buffer.alloc(heartbeatBytes);
+  heartbeat.set(MAGIC, 0);
+  heartbeat.set(uuid.parse(config.appId), OFFSET_APP_ID);
+  heartbeat.set(uuid.parse(config.peerId), OFFSET_PEER_ID);
+  heartbeat.set(config.publicKey, OFFSET_PUBLIC_KEY);
+  heartbeat.writeUInt16BE(gatewayPort, OFFSET_PORT);
+  heartbeat.writeUInt8(peerNameBinary.byteLength, OFFSET_PEER_NAME_LENGTH);
+  heartbeat.set(peerNameBinary, OFFSET_PEER_NAME);
+  return heartbeat;
 }
 
 function jitter(time: number): number {
@@ -60,7 +73,7 @@ export function heartbeatPortFromAppId(appId: string): number {
 
 export interface PeerFinderEvents {
   heartbeat: (evt: {
-    heartbeat: proto.Heartbeat;
+    heartbeat: Heartbeat;
     localAddress: string;
     remoteAddress: string;
   }) => void;
@@ -292,7 +305,7 @@ class PeerFinder extends EventEmitter {
         ifa.name,
         interfaceAddress
       );
-      const message = heartbeatPacket(this.config, ifa, this.gatewayPort);
+      const message = heartbeatPacket(this.config, this.gatewayPort);
       await promisify(ifa.sendSocket.send.bind(ifa.sendSocket))(
         message,
         0,
@@ -313,22 +326,41 @@ class PeerFinder extends EventEmitter {
   }
 
   private receiveHeartbeat(
-    packet: Uint8Array,
+    packet: Buffer,
     remoteAddress: string,
     localAddress: string
   ) {
     try {
-      if (!binaryEqual(MAGIC, packet.subarray(0, MAGIC.byteLength))) {
+      if (
+        !binaryEqual(MAGIC, packet.subarray(0, MAGIC.byteLength)) ||
+        packet.byteLength < OFFSET_PEER_NAME
+      ) {
         this.log.trace(
           'Ignoring broadcast packet from %s: not a heartbeat',
           remoteAddress
         );
         return;
       }
-      const heartbeat = proto.Heartbeat.deserializeBinary(
-        packet.subarray(MAGIC.byteLength)
-      );
-      if (this.config.appId !== uuid.stringify(heartbeat.getAppid_asU8())) {
+      const heartbeat: Heartbeat = {
+        appId: uuid.stringify(
+          packet.subarray(OFFSET_APP_ID, OFFSET_APP_ID + UUID_LENGTH)
+        ),
+        peerId: uuid.stringify(
+          packet.subarray(OFFSET_PEER_ID, OFFSET_PEER_ID + UUID_LENGTH)
+        ),
+        publicKey: packet.subarray(
+          OFFSET_PUBLIC_KEY,
+          OFFSET_PUBLIC_KEY + KEY_BYTES
+        ),
+        port: packet.readUInt16BE(OFFSET_PORT),
+        peerName: packet
+          .subarray(
+            OFFSET_PEER_NAME,
+            OFFSET_PEER_NAME + packet.readUInt8(OFFSET_PEER_NAME_LENGTH)
+          )
+          .toString('utf8'),
+      };
+      if (this.config.appId !== heartbeat.appId) {
         this.log.trace(
           'Ignoring heartbeat from %s: different appId',
           remoteAddress
@@ -336,10 +368,9 @@ class PeerFinder extends EventEmitter {
         return;
       }
       if (
-        heartbeat.getPeerid_asU8().byteLength !== UUID_LENGTH ||
-        heartbeat.getPeername().length > MAX_PEER_NAME_LENGTH ||
-        heartbeat.getPort() < 1024 ||
-        heartbeat.getPort() > 65535
+        heartbeat.peerName.length > MAX_PEER_NAME_LENGTH ||
+        heartbeat.port < 1024 ||
+        heartbeat.port > 65535
       ) {
         this.log.warn(
           'Ignoring heartbeat from %s: malformed heartbeat packet',
@@ -347,19 +378,19 @@ class PeerFinder extends EventEmitter {
         );
         return;
       }
-      const peerId = uuid.stringify(heartbeat.getPeerid_asU8());
+      const peerId = heartbeat.peerId;
       if (peerId === this.config.peerId) {
         return;
       }
 
       const publicKey = this.peerIdToPublicKey(peerId);
       if (publicKey) {
-        if (publicKey.toString('base64') !== heartbeat.getPublickey_asB64()) {
+        if (!binaryEqual(publicKey, heartbeat.publicKey)) {
           this.log.warn(
             'Apparent peer %s at %s:%d has wrong public key',
             peerId,
             remoteAddress,
-            heartbeat.getPort()
+            heartbeat.port
           );
           return;
         }
@@ -369,7 +400,7 @@ class PeerFinder extends EventEmitter {
         'Received heartbeat for %s at %s:%d',
         peerId,
         remoteAddress,
-        heartbeat.getPort()
+        heartbeat.port
       );
 
       // Send a pingback to new peers, to ensure they see us

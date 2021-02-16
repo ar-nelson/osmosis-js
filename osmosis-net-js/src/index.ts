@@ -1,5 +1,4 @@
-import Heartbeat from './osmosis_pb';
-import PeerFinder from './peer-finder';
+import PeerFinder, { Heartbeat } from './peer-finder';
 import OsmosisConnection, { Peer } from './osmosis-connection';
 import { generateConfig, PeerConfig, PeerInfo } from './peer-config';
 import {

@@ -1,9 +1,8 @@
 import Logger from 'bunyan';
 import TypedEventEmitter from './typed-event-emitter';
 import getPort from 'get-port';
-import * as uuid from 'uuid';
 import { PeerConfig } from './peer-config';
-import PeerFinder, { HEARTBEAT_DELAY } from './peer-finder';
+import PeerFinder, { Heartbeat, HEARTBEAT_DELAY } from './peer-finder';
 import * as Monocypher from 'monocypher-wasm';
 import {
   RpcServer,
@@ -11,7 +10,6 @@ import {
   RpcMetadata,
   MethodHandlers,
 } from './rpc-sockets';
-import * as proto from './osmosis_pb';
 import { randomBytes } from 'crypto';
 import assert from 'assert';
 import { createConnection, Socket } from 'net';
@@ -178,33 +176,29 @@ class OsmosisConnection<
   }
 
   private receiveHeartbeat({
-    heartbeat,
+    heartbeat: { peerId, peerName, port, publicKey },
     localAddress,
     remoteAddress,
   }: {
-    heartbeat: proto.Heartbeat;
+    heartbeat: Heartbeat;
     localAddress: string;
     remoteAddress: string;
   }) {
-    const peerId = uuid.stringify(heartbeat.getPeerid_asU8());
     let visible = this.visiblePeers.get(peerId);
     const pushVisible = !visible;
     const now = new Date();
     if (!visible || visible.expiresAt < now) {
       visible = {
         peerId,
-        peerName: heartbeat.getPeername(),
+        peerName,
         remoteAddress,
         localAddress,
-        port: heartbeat.getPort(),
-        publicKey: Buffer.from(heartbeat.getPublickey_asU8()),
+        port,
+        publicKey,
         expiresAt: now,
       };
     }
-    if (
-      remoteAddress !== visible.remoteAddress ||
-      heartbeat.getPort() !== visible.port
-    ) {
+    if (remoteAddress !== visible.remoteAddress || port !== visible.port) {
       this.log.warn(
         {
           peerId,
@@ -214,7 +208,7 @@ class OsmosisConnection<
           },
           ignored: {
             remoteAddress,
-            port: heartbeat.getPort(),
+            port,
           },
         },
         'Multiple heartbeats for same peerId'

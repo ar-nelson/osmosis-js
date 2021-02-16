@@ -3,7 +3,6 @@ import { afterEach, describe, it } from 'mocha';
 import { generateConfig } from '../src/peer-config';
 import PeerFinder from '../src/peer-finder';
 import SocketTestHelper from './socket-test-helper';
-import * as uuid from 'uuid';
 
 describe('PeerFinder', function () {
   const helper = new SocketTestHelper();
@@ -32,13 +31,11 @@ describe('PeerFinder', function () {
         helper.log.child({ peer: 1 })
       );
       pf1.on('heartbeat', ({ heartbeat }) => {
-        expect(uuid.stringify(heartbeat.getAppid_asU8())).to.equal(appId);
-        expect(uuid.stringify(heartbeat.getPeerid_asU8())).to.equal(
-          config2.peerId
-        );
-        expect(heartbeat.getPeername()).to.equal('Test Peer 2');
-        expect(heartbeat.getPort()).to.equal(port2);
-        expect(heartbeat.getPublickey_asB64()).to.equal(
+        expect(heartbeat.appId).to.equal(appId);
+        expect(heartbeat.peerId).to.equal(config2.peerId);
+        expect(heartbeat.peerName).to.equal('Test Peer 2');
+        expect(heartbeat.port).to.equal(port2);
+        expect(heartbeat.publicKey.toString('base64')).to.equal(
           config2.publicKey.toString('base64')
         );
         gotHb2 = true;
@@ -54,13 +51,11 @@ describe('PeerFinder', function () {
           helper.log.child({ peer: 2 })
         );
         pf2.on('heartbeat', ({ heartbeat }) => {
-          expect(uuid.stringify(heartbeat.getAppid_asU8())).to.equal(appId);
-          expect(uuid.stringify(heartbeat.getPeerid_asU8())).to.equal(
-            config1.peerId
-          );
-          expect(heartbeat.getPeername()).to.equal('Test Peer 1');
-          expect(heartbeat.getPort()).to.equal(port1);
-          expect(heartbeat.getPublickey_asB64()).to.equal(
+          expect(heartbeat.appId).to.equal(appId);
+          expect(heartbeat.peerId).to.equal(config1.peerId);
+          expect(heartbeat.peerName).to.equal('Test Peer 1');
+          expect(heartbeat.port).to.equal(port1);
+          expect(heartbeat.publicKey.toString('base64')).to.equal(
             config1.publicKey.toString('base64')
           );
           gotHb1 = true;

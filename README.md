@@ -212,13 +212,19 @@ the first 2 bytes of the App ID:
 heartbeatPort = appId[0] | appId[1] << 8 | 0x8000; // always >= 32768
 ```
 
-The heartbeat is a [Protocol Buffer][protobuf] message containing the following
-information:
+The heartbeat is a binary message, with this layout:
 
-- The App ID (a UUID)
-- The Peer ID (a UUID)
-- The port of the TCP Gateway Service
-- The peer's public key, used to encrypt messages to the Gateway Service
+```txt
+[..][..............][..............][..............................][][... . . .
+|   |               |               |                               | |
+|   App ID (16B)    Peer ID (16B)   Public key (32 bytes)           | |
+|                                                                   | |
+Magic number (4 bytes: 0x054d0515)                                  | |
+                                                                    | |
+                               Port (2 bytes, big-endian 16-bit uint) |
+                                                                      |
+               Peer name (UTF-8 string prefixed with 8-bit uint length)
+```
 
 When peer A receives peer B's heartbeat, it is only considered valid if the
 following conditions apply:
@@ -311,12 +317,12 @@ history, in order. It is computed recursively:
 StateHash(0) = 00000000000000000000000000000000...
 
 StateHash(i + 1) = Blake2B([........ . . . ........][..............][......])
-                                                 |    |                  |
-                   Blake2B(StateHash(i)) (64 bytes)   |                  |
-                                                      |                  |
-                        Peer ID of Actions[i] (16 bytes)                 |
-                                                                         |
-             Lamport number of Actions[i] (8 bytes, big-endian 64-bit uint)
+                                                   |               |       |
+                             StateHash(i) (64 bytes)               |       |
+                                                                   |       |
+                                    Peer ID of Actions[i] (16 bytes)       |
+                                                                           |
+              Lamport number of Actions[i] (8 bytes, big-endian 64-bit uint)
 ```
 
 If two peers have different State Hashes, they are out of sync and must be
@@ -667,7 +673,6 @@ around patents, attribution, and multiple contributors.
 [monocypher]: https://monocypher.org
 [zstd]: https://facebook.github.io/zstd/
 [jsonrpc]: https://www.jsonrpc.org/
-[protobuf]: https://developers.google.com/protocol-buffers
 [blue-oak]: https://blueoakcouncil.org/license/1.0.0
 [why-blue-oak]: https://writing.kemitchell.com/2019/03/09/Deprecation-Notice.html
 
