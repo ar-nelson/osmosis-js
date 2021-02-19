@@ -20,8 +20,8 @@ describe('SaveState', function () {
     saveState = new InMemorySaveState({ metadata: {} });
   });
 
-  it('should set and query a single value', function () {
-    const { changes, failures } = saveState.insert([
+  it('should set and query a single value', async function () {
+    const { changes, failures } = await saveState.insert([
       {
         action: 'Set',
         path: [{ type: 'Key', query: 'foo' }],
@@ -31,7 +31,7 @@ describe('SaveState', function () {
     ]);
     expect(changes).to.deep.equal([Put(['foo'], 'bar')]);
     expect(failures).to.be.empty;
-    const entries = saveState.listObject([]);
+    const entries = await saveState.listObject([]);
     expect(entries).to.deep.include({
       key: 'foo',
       value: 'bar',
@@ -43,7 +43,7 @@ describe('SaveState', function () {
     name: string,
     ops: Op[],
     expectedChanges: Change[][],
-    finalTests: () => void = () => null
+    finalTests: () => Promise<void> = async () => null
   ) {
     const sorted = [...ops].sort((x, y) => idCompare(x.id, y.id));
     const latestIndexes: { [uuid: string]: number } = {};
@@ -59,22 +59,24 @@ describe('SaveState', function () {
     }));
     describe(name, function () {
       it('should apply in order in one insert', async function () {
-        const { changes, failures } = saveState.insert(ops);
+        const { changes, failures } = await saveState.insert(ops);
         expect(failures).to.deep.equal([]);
         for (const cs of expectedChanges) {
           for (const c of cs) {
             expect(changes).to.deep.include(c);
           }
         }
-        expect(saveState.ops()).to.deep.equal(sorted);
-        expect(saveState.failures()).to.be.empty;
-        expect(saveState.stateSummary()).to.deep.equal(await stateSummary);
-        finalTests();
+        expect(await saveState.ops()).to.deep.equal(sorted);
+        expect(await saveState.failures()).to.be.empty;
+        expect(await saveState.stateSummary()).to.deep.equal(
+          await stateSummary
+        );
+        await finalTests();
       });
 
       it('should apply in order in multiple inserts', async function () {
         for (let i = 0; i < ops.length; i++) {
-          const { changes, failures } = saveState.insert([ops[i]]);
+          const { changes, failures } = await saveState.insert([ops[i]]);
           if (i === 0) {
             expect(failures).to.deep.equal([]);
           }
@@ -82,31 +84,37 @@ describe('SaveState', function () {
             expect(changes).to.deep.equal(expectedChanges[i]);
           }
         }
-        expect(saveState.ops()).to.deep.equal(sorted);
-        expect(saveState.failures()).to.be.empty;
-        expect(saveState.stateSummary()).to.deep.equal(await stateSummary);
-        finalTests();
+        expect(await saveState.ops()).to.deep.equal(sorted);
+        expect(await saveState.failures()).to.be.empty;
+        expect(await saveState.stateSummary()).to.deep.equal(
+          await stateSummary
+        );
+        await finalTests();
       });
 
       it('should apply in reverse order in one insert', async function () {
-        const { changes, failures } = saveState.insert([...ops].reverse());
+        const { changes, failures } = await saveState.insert(
+          [...ops].reverse()
+        );
         expect(failures).to.deep.equal([]);
         for (const cs of expectedChanges) {
           for (const c of cs) {
             expect(changes).to.deep.include(c);
           }
         }
-        expect(saveState.ops()).to.deep.equal(sorted);
-        expect(saveState.failures()).to.be.empty;
-        expect(saveState.stateSummary()).to.deep.equal(await stateSummary);
-        finalTests();
+        expect(await saveState.ops()).to.deep.equal(sorted);
+        expect(await saveState.failures()).to.be.empty;
+        expect(await saveState.stateSummary()).to.deep.equal(
+          await stateSummary
+        );
+        await finalTests();
       });
 
       it('should apply in reverse order in multiple inserts', async function () {
         this.timeout(10000);
         const allChanges: Change[] = [];
         for (let i = ops.length - 1; i >= 0; i--) {
-          const { changes, failures } = saveState.insert([ops[i]]);
+          const { changes, failures } = await saveState.insert([ops[i]]);
           if (i === 0) {
             expect(failures).to.deep.equal([]);
           }
@@ -117,10 +125,12 @@ describe('SaveState', function () {
             expect(allChanges).to.deep.include(c);
           }
         }
-        expect(saveState.ops()).to.deep.equal(sorted);
-        expect(saveState.failures()).to.be.empty;
-        expect(saveState.stateSummary()).to.deep.equal(await stateSummary);
-        finalTests();
+        expect(await saveState.ops()).to.deep.equal(sorted);
+        expect(await saveState.failures()).to.be.empty;
+        expect(await saveState.stateSummary()).to.deep.equal(
+          await stateSummary
+        );
+        await finalTests();
       });
     });
   }
@@ -148,8 +158,8 @@ describe('SaveState', function () {
       },
     ],
     [[Put(['foo'], 1)], [Put(['bar'], 2)], [Put(['baz'], 3)]],
-    () => {
-      const entries = saveState.listObject([]);
+    async () => {
+      const entries = await saveState.listObject([]);
       expect(entries).to.have.length(3);
       expect(entries).to.deep.include({
         key: 'foo',
@@ -192,8 +202,8 @@ describe('SaveState', function () {
       },
     ],
     [[Put(['foo'], 1)], [Put(['bar'], 2)], [Put(['baz'], 3)]],
-    () => {
-      const entries = saveState.listObject([]);
+    async () => {
+      const entries = await saveState.listObject([]);
       expect(entries).to.have.length(3);
       expect(entries).to.deep.include({
         key: 'foo',
@@ -222,8 +232,8 @@ describe('SaveState', function () {
       id: { author: uuid.NIL, index: i + 1 },
     })),
     [...new Array(100)].map((_, i) => [Put([`k${i}`], i)]),
-    () => {
-      expect(saveState.listObject([])).to.have.length(100);
+    async () => {
+      expect(await saveState.listObject([])).to.have.length(100);
     }
   );
 
@@ -250,8 +260,8 @@ describe('SaveState', function () {
       },
     ],
     [[Put(['foo'], 1)], [Put(['foo'], 2)], [Put(['foo'], 3)]],
-    () => {
-      expect(saveState.listObject([])).to.deep.equal([
+    async () => {
+      expect(await saveState.listObject([])).to.deep.equal([
         {
           key: 'foo',
           value: 3,
@@ -270,8 +280,8 @@ describe('SaveState', function () {
       id: { author: uuid.NIL, index: i + 1 },
     })),
     [...new Array(100)].map((_, i) => [Put(['foo'], i)]),
-    () => {
-      expect(saveState.listObject([])).to.deep.equal([
+    async () => {
+      expect(await saveState.listObject([])).to.deep.equal([
         {
           key: 'foo',
           value: 99,
@@ -314,8 +324,8 @@ describe('SaveState', function () {
       [Put(['foo', 1], 'b')],
       [Put(['foo', 2], 'c')],
     ],
-    () => {
-      const entries = saveState.listArray(['foo']);
+    async () => {
+      const entries = await saveState.listArray(['foo']);
       expect(entries).to.have.length(3);
       expect(entries[0]).to.deep.include({
         value: 'a',
@@ -365,8 +375,8 @@ describe('SaveState', function () {
       [Put(['foo', 1], 'b')],
       [Put(['foo', 2], 'c')],
     ],
-    () => {
-      const entries = saveState.listArray(['foo']);
+    async () => {
+      const entries = await saveState.listArray(['foo']);
       expect(entries).to.deep.equal([
         {
           value: 'a',
@@ -421,8 +431,8 @@ describe('SaveState', function () {
         Put(['foo', 0], 'a'),
       ],
     ],
-    () => {
-      const entries = saveState.listArray(['foo']);
+    async () => {
+      const entries = await saveState.listArray(['foo']);
       expect(entries).to.deep.equal([
         {
           value: 'a',
@@ -460,8 +470,8 @@ describe('SaveState', function () {
       },
     ],
     [[Put(['foo'], {})], [Touch(['foo'])], [Touch(['foo'])]],
-    () => {
-      const entries = saveState.listObject([]);
+    async () => {
+      const entries = await saveState.listObject([]);
       expect(entries).to.have.length(1);
       expect(entries[0]).to.include({
         key: 'foo',

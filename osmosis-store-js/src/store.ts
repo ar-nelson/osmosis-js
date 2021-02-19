@@ -1,7 +1,7 @@
-import flatMap from 'lodash.flatmap';
-import { mapActionToList, Change } from './actions';
+import { Change, mapActionToList } from './actions';
 import Dispatchable from './dispatchable';
 import { Id, Uuid } from './id';
+import { toJsonWithAdapter } from './json-adapter';
 import { JsonCache, JsonCacheAdapter } from './json-cache';
 import {
   canMatchAbsolutePath,
@@ -16,6 +16,7 @@ import {
 import Queryable from './queryable';
 import { Op, SavePoint, SaveState, StateSummary } from './save-state';
 import { Cancelable, Failure, Json, OsmosisFailureError } from './types';
+import { flatMap } from './utils';
 
 interface QueryListener {
   readonly path: CompiledJsonPath;
@@ -24,41 +25,47 @@ interface QueryListener {
 
 export default class Store implements Dispatchable<JsonPathAction>, Queryable {
   private readonly cache: JsonCache;
-  private readonly uuid: Uuid;
+  private readonly uuid: Promise<Uuid>;
   private nextIndex;
   private queryListeners: QueryListener[] = [];
 
-  constructor(public readonly saveState: SaveState<{ uuid: Uuid }>) {
+  constructor(public readonly saveState: SaveState<{ readonly peerId: Uuid }>) {
     this.cache = new JsonCache(saveState);
-    this.uuid = saveState.metadata().uuid;
-    this.nextIndex =
-      [...Object.values(saveState.stateSummary)].reduce(
-        (x, y) => Math.max(x, y),
-        0
-      ) + 1;
+    this.uuid = saveState.metadata().then((x) => x.peerId);
+    saveState.stateSummary().then(({ latestIndexes }) => {
+      this.nextIndex =
+        [...Object.values(latestIndexes)].reduce((x, y) => Math.max(x, y), 0) +
+        1;
+    });
   }
 
-  dispatch(action: JsonPathAction, returnFailures: true): Failure[];
-  dispatch(action: JsonPathAction, returnFailures?: boolean): void;
-
+  dispatch(action: JsonPathAction, returnFailures: true): Promise<Failure[]>;
   dispatch(
     action: JsonPathAction,
+    returnFailures?: boolean
+  ): Promise<undefined>;
+
+  async dispatch(
+    action: JsonPathAction,
     returnFailures = false
-  ): readonly Failure[] | undefined {
-    const processedActions = mapActionToList(
+  ): Promise<readonly Failure[] | undefined> {
+    const processedActions = await mapActionToList(
       compileJsonPathAction(action),
       (path) =>
-        splitIntoSingularPaths(path).map((path) =>
-          this.cache.anchorPathToId(path)
+        Promise.all(
+          splitIntoSingularPaths(path).map((path) =>
+            this.cache.anchorPathToId(path)
+          )
         )
     );
-    const ops: Op[] = processedActions.map((action) => {
-      const id: Id = { author: this.uuid, index: this.nextIndex };
+    const ops = [] as Op[];
+    for (const action of processedActions) {
+      const id: Id = { author: await this.uuid, index: this.nextIndex };
       this.nextIndex +=
         action.action === 'Transaction' ? action.payload.length : 1;
-      return { ...action, id };
-    });
-    const { failures } = this.mergeOps(ops);
+      ops.push({ ...action, id });
+    }
+    const { failures } = await this.mergeOps(ops);
     if (returnFailures) {
       return failures;
     } else if (failures.length) {
@@ -69,10 +76,10 @@ export default class Store implements Dispatchable<JsonPathAction>, Queryable {
     }
   }
 
-  mergeOps(
+  async mergeOps(
     ops: Op[]
-  ): { changes: readonly Change[]; failures: readonly Failure[] } {
-    const { changes, failures } = this.saveState.insert(ops);
+  ): Promise<{ changes: readonly Change[]; failures: readonly Failure[] }> {
+    const { changes, failures } = await this.saveState.insert(ops);
     const changedPaths = flatMap(changes, (change) => {
       switch (change.type) {
         case 'Put':
@@ -88,7 +95,11 @@ export default class Store implements Dispatchable<JsonPathAction>, Queryable {
     for (const listener of this.queryListeners) {
       if (changedPaths.some((p) => canMatchAbsolutePath(listener.path, p))) {
         listener.callback(
-          this.cache.queryValues(listener.path).map(JsonCacheAdapter.toJson)
+          await Promise.all(
+            (await this.cache.queryValues(listener.path)).map((j) =>
+              toJsonWithAdapter(j, JsonCacheAdapter)
+            )
+          )
         );
       }
     }
@@ -113,8 +124,14 @@ export default class Store implements Dispatchable<JsonPathAction>, Queryable {
       typeof arg1 === 'function' ? arg1 : (arg2 as (json: Json) => void);
     const entry = { path, callback };
     this.queryListeners.push(entry);
-    setImmediate(() =>
-      callback(this.cache.queryValues(path).map(JsonCacheAdapter.toJson))
+    setImmediate(async () =>
+      callback(
+        await Promise.all(
+          (await this.cache.queryValues(path)).map((j) =>
+            toJsonWithAdapter(j, JsonCacheAdapter)
+          )
+        )
+      )
     );
     return {
       cancel() {
@@ -123,21 +140,23 @@ export default class Store implements Dispatchable<JsonPathAction>, Queryable {
     };
   }
 
-  queryOnce(query: JsonPath, vars: Vars = {}): Json[] {
-    return this.cache
-      .queryValues(compileJsonPath(query, vars))
-      .map(JsonCacheAdapter.toJson);
+  async queryOnce(query: JsonPath, vars: Vars = {}): Promise<Json[]> {
+    return Promise.all(
+      (await this.cache.queryValues(compileJsonPath(query, vars))).map((j) =>
+        toJsonWithAdapter(j, JsonCacheAdapter)
+      )
+    );
   }
 
-  get ops(): readonly Op[] {
+  get ops(): Promise<readonly Op[]> {
     return this.saveState.ops();
   }
 
-  get savePoints(): readonly SavePoint[] {
+  get savePoints(): Promise<readonly SavePoint[]> {
     return this.saveState.savePoints();
   }
 
-  get stateSummary(): StateSummary {
+  get stateSummary(): Promise<StateSummary> {
     return this.saveState.stateSummary();
   }
 }

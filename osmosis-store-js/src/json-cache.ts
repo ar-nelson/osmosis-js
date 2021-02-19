@@ -47,14 +47,14 @@ export interface NonEmptyJsonCacheEntry<Key extends string | number>
 }
 
 export interface CacheSource {
-  lookupByPath(path: PathArray): JsonCacheDatum;
+  lookupByPath(path: PathArray): Promise<JsonCacheDatum>;
   lookupById(
     id: Id
-  ): (JsonCacheDatum & { readonly path: AbsolutePathArray }) | null;
+  ): Promise<(JsonCacheDatum & { readonly path: AbsolutePathArray }) | null>;
   listObject(
     path: PathArray
-  ): readonly (NonEmptyJsonCacheDatum & { key: string })[];
-  listArray(path: PathArray): readonly NonEmptyJsonCacheDatum[];
+  ): Promise<readonly (NonEmptyJsonCacheDatum & { key: string })[]>;
+  listArray(path: PathArray): Promise<readonly NonEmptyJsonCacheDatum[]>;
 }
 
 export class JsonCache {
@@ -68,17 +68,17 @@ export class JsonCache {
     this.root = new JsonCacheObject([], source);
   }
 
-  lookupByPath(
+  async lookupByPath(
     path: PathArray
-  ): { found: boolean; entry: JsonCacheEntry<string | number> } {
+  ): Promise<{ found: boolean; entry: JsonCacheEntry<string | number> }> {
     let lastEntry: JsonCacheEntry<string | number> | null = null;
     let value: JsonCacheValue | undefined = this.root;
     for (const key of path) {
       if (typeof key === 'string' && value instanceof JsonCacheObject) {
-        lastEntry = value.getKey(key);
+        lastEntry = await value.getKey(key);
         value = lastEntry.value;
       } else if (typeof key === 'number' && value instanceof JsonCacheArray) {
-        lastEntry = value.getKey(key);
+        lastEntry = await value.getKey(key);
         value = lastEntry.value;
       } else {
         return {
@@ -90,18 +90,18 @@ export class JsonCache {
     return { found: true, entry: lastEntry as JsonCacheEntry<string | number> };
   }
 
-  lookupById(id: Id): JsonCacheEntry<string | number> | null {
+  async lookupById(id: Id): Promise<JsonCacheEntry<string | number> | null> {
     const idString = idToString(id);
     const cached = this.entriesById.get(idString);
     if (cached !== undefined) {
       return cached;
     }
-    const lookup = this.source.lookupById(id);
+    const lookup = await this.source.lookupById(id);
     if (lookup == null) {
       this.entriesById.set(idString, null);
       return null;
     }
-    const { found, entry } = this.lookupByPath(
+    const { found, entry } = await this.lookupByPath(
       lookup.path as [string, ...PathArray]
     );
     if (!found) {
@@ -112,11 +112,11 @@ export class JsonCache {
     return entry;
   }
 
-  expirePath(path: AbsolutePathArray): boolean {
+  async expirePath(path: AbsolutePathArray): Promise<boolean> {
     if (path.length === 1) {
       return this.root.expireKey(path[0]);
     }
-    const { found, entry: parent } = this.lookupByPath(
+    const { found, entry: parent } = await this.lookupByPath(
       path.slice(0, path.length - 1) as [string, ...PathArray]
     );
     if (!found || !(parent.value instanceof JsonCacheStructure)) {
@@ -127,7 +127,7 @@ export class JsonCache {
     );
   }
 
-  expireId(id: Id): boolean {
+  async expireId(id: Id): Promise<boolean> {
     const idString = idToString(id);
     const cached = this.entriesById.get(idString);
     this.entriesById.delete(idString);
@@ -135,9 +135,8 @@ export class JsonCache {
       return cached === null;
     }
     if (cached.parentPath.length) {
-      (this.lookupByPath(cached.parentPath).entry.value as JsonCacheStructure<
-        string | number
-      >).expireKey(cached.key);
+      ((await this.lookupByPath(cached.parentPath)).entry
+        .value as JsonCacheStructure<string | number>).expireKey(cached.key);
     } else {
       this.root.expireKey(cached.key as string);
     }
@@ -154,17 +153,17 @@ export class JsonCache {
     this.root.expireIdsAfter(id);
   }
 
-  queryValues(
+  async queryValues(
     path: CompiledJsonPath | CompiledJsonIdPath
-  ): readonly JsonCacheValue[] {
+  ): Promise<readonly JsonCacheValue[]> {
     let root: JsonCacheValue = this.root;
     if (!path.length) {
       return [root];
     }
     if (path[0].type === 'Id') {
-      let idMatch = this.lookupById(path[0].query.id);
+      let idMatch = await this.lookupById(path[0].query.id);
       if (!idMatch) {
-        const { found, entry } = this.lookupByPath(path[0].query.path);
+        const { found, entry } = await this.lookupByPath(path[0].query.path);
         if (found) {
           idMatch = entry;
         }
@@ -178,9 +177,9 @@ export class JsonCache {
     return queryValues(path as CompiledJsonPath, root, JsonCacheAdapter);
   }
 
-  anchorPathToId(
+  async anchorPathToId(
     path: CompiledJsonPath
-  ): CompiledJsonPath | CompiledJsonIdPath {
+  ): Promise<CompiledJsonPath | CompiledJsonIdPath> {
     let struct: JsonCacheStructure<string | number> = this.root;
     let lastId: Id | null = null;
     let lastIdIndex = 0;
@@ -189,7 +188,7 @@ export class JsonCache {
     for (let i = 0; i < path.length; i++) {
       const segment = path[i];
       if (segment.type === 'Index' || segment.type === 'Key') {
-        const entry = struct.getKey(segment.query);
+        const entry = await struct.getKey(segment.query);
         queryPathAccum.push(segment.query);
         if (entry.ids.length) {
           lastId = entry.ids[0];
@@ -246,13 +245,13 @@ export abstract class JsonCacheStructure<Key extends string | number> {
     };
   }
 
-  getKey(key: Key): JsonCacheEntry<Key> {
+  async getKey(key: Key): Promise<JsonCacheEntry<Key>> {
     const cached = this.entriesByKey.get(key);
     if (cached != null) {
       return cached;
     }
     const loaded = this.datumToEntry(
-      this.source.lookupByPath([...this.path, key]),
+      await this.source.lookupByPath([...this.path, key]),
       key
     );
     this.entriesByKey.set(key, loaded);
@@ -276,8 +275,8 @@ export abstract class JsonCacheStructure<Key extends string | number> {
   }
 
   abstract expireEntries(): void;
-  abstract entries(): readonly NonEmptyJsonCacheEntry<Key>[];
-  abstract toJson(): Json;
+  abstract entries(): Promise<readonly NonEmptyJsonCacheEntry<Key>[]>;
+  abstract toJson(): Promise<Json>;
 }
 
 export class JsonCacheObject extends JsonCacheStructure<string> {
@@ -291,28 +290,27 @@ export class JsonCacheObject extends JsonCacheStructure<string> {
     this.hasAllEntries = false;
   }
 
-  entries(): readonly NonEmptyJsonCacheEntry<string>[] {
+  async entries(): Promise<readonly NonEmptyJsonCacheEntry<string>[]> {
     if (this.hasAllEntries) {
       return [...this.entriesByKey.values()].filter(
         (x) => x.value !== undefined
       ) as NonEmptyJsonCacheEntry<string>[];
     }
     this.hasAllEntries = true;
-    return this.source.listObject(this.path).map((datum) => {
+    return (await this.source.listObject(this.path)).map((datum) => {
       const entry = this.datumToEntry(datum, datum.key);
       this.entriesByKey.set(entry.key, entry);
       return entry;
     });
   }
 
-  toJson(): JsonObject {
-    return this.entries().reduce(
-      (obj, { key, value }) => ({
-        ...obj,
-        [key]: value instanceof JsonCacheStructure ? value.toJson() : value,
-      }),
-      {}
-    );
+  async toJson(): Promise<JsonObject> {
+    const json: { [key: string]: Json } = {};
+    for (const { key, value } of await this.entries()) {
+      json[key] =
+        value instanceof JsonCacheStructure ? await value.toJson() : value;
+    }
+    return json;
   }
 }
 
@@ -323,24 +321,24 @@ export class JsonCacheArray extends JsonCacheStructure<number> {
     super(path, source);
   }
 
-  length(): number {
+  async length(): Promise<number> {
     if (this.cachedLength >= 0) {
       return this.cachedLength;
     }
-    return this.entries().length;
+    return (await this.entries()).length;
   }
 
   expireEntries(): void {
     this.cachedLength = -1;
   }
 
-  entries(): readonly NonEmptyJsonCacheEntry<number>[] {
+  async entries(): Promise<readonly NonEmptyJsonCacheEntry<number>[]> {
     if (this.cachedLength >= 0) {
       return [...new Array(this.cachedLength)].map(
         (_, i) => this.entriesByKey.get(i) as NonEmptyJsonCacheEntry<number>
       );
     }
-    const list = this.source.listArray(this.path);
+    const list = await this.source.listArray(this.path);
     this.cachedLength = list.length;
     return list.map((datum, key) => {
       const entry = this.datumToEntry(datum, key);
@@ -349,11 +347,13 @@ export class JsonCacheArray extends JsonCacheStructure<number> {
     });
   }
 
-  toJson(): JsonArray {
-    // Assumes this.entries() returns elements in order, which it should.
-    return this.entries().map(({ value }) =>
-      value instanceof JsonCacheStructure ? value.toJson() : value
-    );
+  async toJson(): Promise<JsonArray> {
+    const json: Json[] = [];
+    for (const { key, value } of await this.entries()) {
+      json[key] =
+        value instanceof JsonCacheStructure ? await value.toJson() : value;
+    }
+    return json;
   }
 }
 
@@ -387,16 +387,16 @@ export const JsonCacheAdapter: JsonAdapter<JsonCacheValue> = Object.freeze({
     return typeof json === 'string' ? json : undefined;
   },
 
-  arrayLength(json: JsonCacheValue): number | undefined {
+  async arrayLength(json: JsonCacheValue): Promise<number | undefined> {
     return json instanceof JsonCacheArray ? json.length() : undefined;
   },
 
-  getIndex(
+  async getIndex(
     json: JsonCacheValue,
     index: number
-  ): JsonAdapterResult<JsonCacheValue> {
+  ): Promise<JsonAdapterResult<JsonCacheValue>> {
     if (json instanceof JsonCacheArray) {
-      const entry = json.getKey(index);
+      const entry = await json.getKey(index);
       return {
         canExist: true,
         exists: entry.value !== undefined,
@@ -406,9 +406,12 @@ export const JsonCacheAdapter: JsonAdapter<JsonCacheValue> = Object.freeze({
     return NO_RESULT;
   },
 
-  getKey(json: JsonCacheValue, key: string): JsonAdapterResult<JsonCacheValue> {
+  async getKey(
+    json: JsonCacheValue,
+    key: string
+  ): Promise<JsonAdapterResult<JsonCacheValue>> {
     if (json instanceof JsonCacheObject) {
-      const entry = json.getKey(key);
+      const entry = await json.getKey(key);
       return {
         canExist: true,
         exists: entry.value !== undefined,
@@ -418,21 +421,16 @@ export const JsonCacheAdapter: JsonAdapter<JsonCacheValue> = Object.freeze({
     return NO_RESULT;
   },
 
-  listEntries(
+  async listEntries(
     json: JsonCacheValue
-  ): readonly (readonly [string | number, JsonCacheValue])[] | undefined {
+  ): Promise<
+    readonly (readonly [string | number, JsonCacheValue])[] | undefined
+  > {
     if (json instanceof JsonCacheStructure) {
-      return (json.entries() as readonly NonEmptyJsonCacheEntry<
+      return ((await json.entries()) as readonly NonEmptyJsonCacheEntry<
         string | number
       >[]).map((e) => [e.key, e.value]);
     }
     return undefined;
-  },
-
-  toJson(json: JsonCacheValue): Json {
-    if (json instanceof JsonCacheStructure) {
-      return json.toJson();
-    }
-    return json;
   },
 });

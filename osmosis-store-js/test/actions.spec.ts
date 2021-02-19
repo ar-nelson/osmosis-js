@@ -5,10 +5,10 @@ import { JsonJsonAdapter } from '../src/json-adapter';
 import { Key, Index, Put, Delete, Touch, Move } from './mock-constructors';
 
 describe('JSON Action', function () {
-  describe('Set', function () {
-    it('should set a key on the root object', function () {
+  describe('Set', async function () {
+    it('should set a key on the root object', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Set', path: [Key('foo')], payload: 2 },
           { foo: 1 },
           JsonJsonAdapter
@@ -19,9 +19,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should set multi-level paths', function () {
+    it('should set multi-level paths', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           {
             action: 'Set',
             path: [Key('foo'), Key('bar'), Index(1), Key('baz')],
@@ -36,9 +36,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should overwrite existing array elements', function () {
+    it('should overwrite existing array elements', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Set', path: [Key('foo'), Index(1)], payload: 25 },
           { foo: [10, 20, 30] },
           JsonJsonAdapter
@@ -49,9 +49,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should add a trailing array element', function () {
+    it('should add a trailing array element', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Set', path: [Key('foo'), Index(3)], payload: 40 },
           { foo: [10, 20, 30] },
           JsonJsonAdapter
@@ -62,9 +62,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should add an element past the end of an array, inserting nulls in between', function () {
+    it('should add an element past the end of an array, inserting nulls in between', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Set', path: [Key('foo'), Index(6)], payload: 40 },
           { foo: [10, 20, 30] },
           JsonJsonAdapter
@@ -80,9 +80,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should report failure when a path does not exist', function () {
+    it('should report failure when a path does not exist', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Set', path: [Key('baz'), Key('qux')], payload: 3 },
           { foo: 1, bar: 2 },
           JsonJsonAdapter
@@ -99,10 +99,10 @@ describe('JSON Action', function () {
     });
   });
 
-  describe('Delete', function () {
-    it('should delete a key on the root object', function () {
+  describe('Delete', async function () {
+    it('should delete a key on the root object', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Delete', path: [Key('bar')] },
           { foo: 1, bar: 2 },
           JsonJsonAdapter
@@ -113,9 +113,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should delete deep object keys', function () {
+    it('should delete deep object keys', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Delete', path: [Key('foo'), Key('bar'), Key('baz')] },
           { foo: { bar: { baz: { qux: {} } } } },
           JsonJsonAdapter
@@ -126,9 +126,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should delete trailing array elements', function () {
+    it('should delete trailing array elements', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Delete', path: [Key('foo'), Index(2)] },
           { foo: [1, 2, 3] },
           JsonJsonAdapter
@@ -139,9 +139,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should shift remaining array elements to fill a deleted space', function () {
+    it('should shift remaining array elements to fill a deleted space', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Delete', path: [Key('foo'), Index(1)] },
           { foo: [1, 2, 3, 4] },
           JsonJsonAdapter
@@ -152,9 +152,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should report failure when a path does not exist', function () {
+    it('should report failure when a path does not exist', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'Delete', path: [Key('baz'), Key('qux')] },
           { foo: 1, bar: 2 },
           JsonJsonAdapter
@@ -171,10 +171,10 @@ describe('JSON Action', function () {
     });
   });
 
-  describe('InitArray', function () {
-    it('should set a non-array key to []', function () {
+  describe('InitArray', async function () {
+    it('should set a non-array key to []', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'InitArray', path: [Key('foo')] },
           { foo: {} },
           JsonJsonAdapter
@@ -185,9 +185,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should set a nonexistent key to []', function () {
+    it('should set a nonexistent key to []', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'InitArray', path: [Key('bar')] },
           { foo: 1 },
           JsonJsonAdapter
@@ -198,9 +198,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should ignore an existing array', function () {
+    it('should ignore an existing array', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'InitArray', path: [Key('foo')] },
           { foo: [1, 2, 3] },
           JsonJsonAdapter
@@ -211,9 +211,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should report failure when a path does not exist', function () {
+    it('should report failure when a path does not exist', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'InitArray', path: [Key('baz'), Key('qux')] },
           { foo: 1, bar: 2 },
           JsonJsonAdapter
@@ -230,10 +230,10 @@ describe('JSON Action', function () {
     });
   });
 
-  describe('InitObject', function () {
-    it('should set a non-object key to {}', function () {
+  describe('InitObject', async function () {
+    it('should set a non-object key to {}', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'InitObject', path: [Key('foo')] },
           { foo: [] },
           JsonJsonAdapter
@@ -244,9 +244,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should set a nonexistent key to {}', function () {
+    it('should set a nonexistent key to {}', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'InitObject', path: [Key('bar')] },
           { foo: 1 },
           JsonJsonAdapter
@@ -257,9 +257,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should ignore an existing object', function () {
+    it('should ignore an existing object', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'InitObject', path: [Key('foo')] },
           { foo: { bar: 'baz' } },
           JsonJsonAdapter
@@ -270,9 +270,9 @@ describe('JSON Action', function () {
       });
     });
 
-    it('should report failure when a path does not exist', function () {
+    it('should report failure when a path does not exist', async function () {
       expect(
-        actionToChanges(
+        await actionToChanges(
           { action: 'InitObject', path: [Key('baz'), Key('qux')] },
           { foo: 1, bar: 2 },
           JsonJsonAdapter

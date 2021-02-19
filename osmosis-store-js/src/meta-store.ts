@@ -54,16 +54,16 @@ export class MetaStore implements Queryable {
         keys = [];
         break;
     }
-    const handlers = keys.map((key) => (json: Json) =>
+    const handlers = keys.map((key) => async (json: Json) =>
       callback(
-        queryValues(path, { ...this.state, [key]: json }, JsonJsonAdapter)
+        await queryValues(path, { ...this.state, [key]: json }, JsonJsonAdapter)
       )
     );
     for (let i = 0; i < keys.length; i++) {
       this.sources[keys[i]].subscribe(handlers[i]);
     }
-    setImmediate(() =>
-      callback(queryValues(path, this.state, JsonJsonAdapter))
+    setImmediate(async () =>
+      callback(await queryValues(path, this.state, JsonJsonAdapter))
     );
     return {
       cancel() {
@@ -74,7 +74,7 @@ export class MetaStore implements Queryable {
     };
   }
 
-  queryOnce(query: JsonPath, vars: Vars = {}): Json[] {
+  async queryOnce(query: JsonPath, vars: Vars = {}): Promise<Json[]> {
     return queryValues(
       compileJsonPath(query, vars),
       this.state,

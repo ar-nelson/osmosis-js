@@ -23,31 +23,31 @@ class MockMetadataSource implements MetadataSource {
 }
 
 describe('MetaStore', function () {
-  it('should query a static data source', function () {
+  it('should query a static data source', async function () {
     const data = new MockMetadataSource(['foo', 'bar', 'baz']);
     const store = new MetaStore({ data });
-    expect(store.queryOnce('$')).to.deep.equal([
+    expect(await store.queryOnce('$')).to.deep.equal([
       { data: ['foo', 'bar', 'baz'] },
     ]);
-    expect(store.queryOnce('$.data[0, 1]')).to.deep.equal(['foo', 'bar']);
+    expect(await store.queryOnce('$.data[0, 1]')).to.deep.equal(['foo', 'bar']);
   });
 
-  it('should query multiple static data sources', function () {
+  it('should query multiple static data sources', async function () {
     const foo = new MockMetadataSource([1, 2, 3]);
     const bar = new MockMetadataSource({ a: 10, b: 20 });
     const store = new MetaStore({ foo, bar });
-    expect(store.queryOnce('$')).to.deep.equal([
+    expect(await store.queryOnce('$')).to.deep.equal([
       { foo: [1, 2, 3], bar: { a: 10, b: 20 } },
     ]);
-    expect(store.queryOnce('$.foo[0, 2]')).to.deep.equal([1, 3]);
+    expect(await store.queryOnce('$.foo[0, 2]')).to.deep.equal([1, 3]);
   });
 
-  it('should query a static data source after an update', function () {
+  it('should query a static data source after an update', async function () {
     const data = new MockMetadataSource(['foo', 'bar', 'baz']);
     const store = new MetaStore({ data });
-    expect(store.queryOnce('$.data[0, 1]')).to.deep.equal(['foo', 'bar']);
+    expect(await store.queryOnce('$.data[0, 1]')).to.deep.equal(['foo', 'bar']);
     data.setState(['baz', 'qux', 'quux']);
-    expect(store.queryOnce('$.data[0, 1]')).to.deep.equal(['baz', 'qux']);
+    expect(await store.queryOnce('$.data[0, 1]')).to.deep.equal(['baz', 'qux']);
   });
 
   it('should subscribe to a dynamic data source', function (done) {

@@ -17,19 +17,19 @@ export interface SavePoint extends StateSummary {
   readonly width: number;
 }
 
-export interface SaveState<Metadata extends { readonly [key: string]: string }>
-  extends CacheSource {
+export interface SaveState<Metadata> extends CacheSource {
   insert(
     ops: Op[]
-  ): {
+  ): Promise<{
     changes: readonly Change[];
     failures: readonly Failure[];
-  };
-  ops(maxLength?: number): readonly Op[];
-  failures(maxLength?: number): readonly Failure[];
-  rewind(latestId: Id): readonly Op[];
-  savePoints(): readonly SavePoint[];
-  metadata(): Metadata;
-  setMetadata(metadata: Metadata): void;
-  stateSummary(): StateSummary;
+  }>;
+  ops(maxLength?: number): Promise<readonly Op[]>;
+  failures(maxLength?: number): Promise<readonly Failure[]>;
+  rewind(latestId: Id): Promise<readonly Op[]>;
+  savePoints(): Promise<readonly SavePoint[]>;
+  metadata(): Promise<Metadata>;
+  setMetadata(metadata: Metadata): Promise<void>;
+  initMetadata(initializer: () => Promise<Metadata>): Promise<void>;
+  stateSummary(): Promise<StateSummary>;
 }

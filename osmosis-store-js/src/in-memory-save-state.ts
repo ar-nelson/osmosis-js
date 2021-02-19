@@ -1,7 +1,6 @@
-import { produce, Draft } from 'immer';
-import isEqual from 'lodash.isequal';
-import isPlainObject from 'lodash.isplainobject';
-import last from 'lodash.last';
+import assert from 'assert';
+import { Draft, produce } from 'immer';
+import { actionToChanges, Change, ScalarAction } from './actions';
 import {
   Id,
   idCompare,
@@ -11,6 +10,7 @@ import {
   ZERO_ID,
   ZERO_STATE_HASH,
 } from './id';
+import { followPath, JsonDraftAdapter } from './json-adapter';
 import {
   JsonCacheDatum,
   JsonCacheStructureMarker,
@@ -21,14 +21,12 @@ import {
   AbsolutePathArray,
   Failure,
   Json,
-  JsonScalar,
   JsonArray,
   JsonObject,
+  JsonScalar,
   PathArray,
 } from './types';
-import { Change, ScalarAction, actionToChanges } from './actions';
-import { JsonDraftAdapter, followPath } from './json-adapter';
-import assert from 'assert';
+import { isEqual, isObject, last, reduceAsync } from './utils';
 
 export interface IdMappedJson {
   readonly root: JsonObject;
@@ -49,11 +47,6 @@ export interface State<Metadata> extends IdMappedJson, StateSummary {
   readonly ops: readonly Op[];
   readonly failures: readonly (Failure & { readonly id: Id })[];
   readonly savePoints: readonly (SavePoint & IdMappedJson)[];
-  readonly metadata: Metadata;
-}
-
-export interface InMemorySaveStateArgs<Metadata>
-  extends Partial<State<Metadata>> {
   readonly metadata: Metadata;
 }
 
@@ -105,8 +98,8 @@ function moveTree(
     tree.ids.forEach((id) => (idToPath[idToString(id)] = path));
     if (Array.isArray(tree.subtree)) {
       tree.subtree.forEach((t, i) => moveSubtree(t, [...subpath, i]));
-    } else if (isPlainObject(tree.subtree)) {
-      Object.entries(tree.subtree as object).forEach(([k, v]) =>
+    } else if (isObject(tree.subtree)) {
+      Object.entries(tree.subtree).forEach(([k, v]) =>
         moveSubtree(v, [...subpath, k])
       );
     }
@@ -123,15 +116,23 @@ function addIfAbsent<T>(a: T[], b: readonly T[]): void {
   }
 }
 
-function applyChange(change: Change, id: Id, state: Draft<State<unknown>>) {
+async function applyChange(
+  change: Change,
+  id: Id,
+  state: Draft<State<unknown>>
+) {
   // TODO: Unlink IDs of removed subtrees
   switch (change.type) {
     case 'Put': {
       const parent = change.path.slice(0, change.path.length - 1);
       const index = change.path[change.path.length - 1];
-      const { found, value } = followPath(parent, state.root, JsonDraftAdapter);
-      if (found && (Array.isArray(value) || isPlainObject(value))) {
-        (value as JsonArray | JsonObject)[index] = change.value;
+      const { found, value } = await followPath(
+        parent,
+        state.root,
+        JsonDraftAdapter
+      );
+      if (found && (Array.isArray(value) || isObject(value))) {
+        value[index] = change.value;
       }
       state.idToPath[idToString(id)] = change.path as Draft<AbsolutePathArray>;
       pathToIdSubtree(change.path, state.pathToId).ids = [id];
@@ -140,7 +141,11 @@ function applyChange(change: Change, id: Id, state: Draft<State<unknown>>) {
     case 'Delete': {
       const parent = change.path.slice(0, change.path.length - 1);
       const index = change.path[change.path.length - 1];
-      const { found, value } = followPath(parent, state.root, JsonDraftAdapter);
+      const { found, value } = await followPath(
+        parent,
+        state.root,
+        JsonDraftAdapter
+      );
       if (found) {
         if (Array.isArray(value) && index === value.length - 1) {
           value.pop();
@@ -165,8 +170,8 @@ function applyChange(change: Change, id: Id, state: Draft<State<unknown>>) {
       const toParent = change.to.slice(0, change.to.length - 1);
       const fromIndex = change.from[change.from.length - 1];
       const toIndex = change.to[change.to.length - 1];
-      const from = followPath(fromParent, state.root, JsonDraftAdapter);
-      const to = followPath(toParent, state.root, JsonDraftAdapter);
+      const from = await followPath(fromParent, state.root, JsonDraftAdapter);
+      const to = await followPath(toParent, state.root, JsonDraftAdapter);
       if (from.found && to.found) {
         const moved = (from.value as JsonArray | JsonObject)[fromIndex];
         if (Array.isArray(from.value) && fromIndex === from.value.length - 1) {
@@ -182,14 +187,14 @@ function applyChange(change: Change, id: Id, state: Draft<State<unknown>>) {
   }
 }
 
-function applyOp<M>(
+async function applyOp<M>(
   op: Op,
   state: State<M>
-): {
+): Promise<{
   state: State<M>;
   changes: Change[];
   failures: Failure[];
-} {
+}> {
   assert(idIndex(op.id, state.ops, true) < 0, 'op applied twice');
   // FIXME: Transactions get split up into multiple IDs, this is unfinished
   let changes: Change[] = [];
@@ -201,26 +206,26 @@ function applyOp<M>(
           id: { author: op.id.author, index: op.id.index + i },
         }))
       : [op];
-  let newState = produce(state, (state) => {
+  let newState = await produce(state, async (state) => {
     state.hash = nextStateHash(state.hash as Uint8Array, op.id);
     state.ops.push(op as Draft<Op>);
     state.latestIndexes[op.id.author] = Math.max(
       state.latestIndexes[op.id.author] || 0,
       op.id.index
     );
-    scalarOps.forEach((op) => {
-      const result = actionToChanges(
+    for (const op of scalarOps) {
+      const result = await actionToChanges(
         op,
         state.root,
         JsonDraftAdapter,
         (id) => state.idToPath[idToString(id)]
       );
       for (const change of result.changes) {
-        applyChange(change, op.id, state);
+        await applyChange(change, op.id, state);
         changes.push(change);
       }
       failures.push(...result.failures);
-    });
+    }
     state.failures.push(
       ...failures.map((f) => ({ id: op.id, ...(f as Draft<Failure>) }))
     );
@@ -272,12 +277,12 @@ function updateSavePoints({
   return true;
 }
 
-export default class InMemorySaveState<
-  Metadata extends { readonly [key: string]: string }
-> implements SaveState<Metadata> {
-  protected state: State<Metadata>;
+export default class InMemorySaveState<Metadata>
+  implements SaveState<Metadata> {
+  protected state: State<Promise<Metadata>>;
+  private onInitMetadata?: (metadata: Metadata) => void;
 
-  constructor(args: InMemorySaveStateArgs<Metadata>) {
+  constructor(args: Partial<State<Metadata>>) {
     this.state = {
       root: args.root ?? {},
       idToPath: args.idToPath ?? {},
@@ -297,7 +302,12 @@ export default class InMemorySaveState<
           latestIndexes: {},
         },
       ],
-      metadata: args.metadata,
+      metadata:
+        'metadata' in args
+          ? Promise.resolve(args.metadata as Metadata)
+          : new Promise((resolve: (metadata: Metadata) => void) => {
+              this.onInitMetadata = resolve;
+            }),
     };
   }
 
@@ -311,7 +321,7 @@ export default class InMemorySaveState<
   ): JsonScalar | JsonCacheStructureMarker | undefined {
     if (Array.isArray(json)) {
       return JsonCacheStructureMarker.Array;
-    } else if (isPlainObject(json)) {
+    } else if (isObject(json)) {
       return JsonCacheStructureMarker.Object;
     } else {
       return json as JsonScalar | undefined;
@@ -323,8 +333,8 @@ export default class InMemorySaveState<
     for (const key of path) {
       if (Array.isArray(value) && typeof key === 'number') {
         value = value[key];
-      } else if (isPlainObject(value) && typeof key === 'string') {
-        value = (value as JsonObject)[key];
+      } else if (isObject(value) && typeof key === 'string') {
+        value = value[key];
       } else {
         return undefined;
       }
@@ -332,35 +342,35 @@ export default class InMemorySaveState<
     return value;
   }
 
-  lookupByPath(path: PathArray): JsonCacheDatum {
+  async lookupByPath(path: PathArray): Promise<JsonCacheDatum> {
     return {
       value: this.jsonToDatum(this.lookupValue(path)),
       ids: getIdsOfPath(path, this.state.pathToId),
     };
   }
 
-  lookupById(
+  async lookupById(
     id: Id
-  ): (JsonCacheDatum & { readonly path: AbsolutePathArray }) | null {
+  ): Promise<(JsonCacheDatum & { readonly path: AbsolutePathArray }) | null> {
     const path = this.state.idToPath[idToString(id)] as readonly [
       string,
       ...PathArray
     ];
     if (path) {
       return {
-        ...this.lookupByPath(path),
+        ...(await this.lookupByPath(path)),
         path,
       };
     }
     return null;
   }
 
-  listObject(
+  async listObject(
     path: PathArray
-  ): readonly (NonEmptyJsonCacheDatum & { key: string })[] {
+  ): Promise<readonly (NonEmptyJsonCacheDatum & { key: string })[]> {
     const obj = this.lookupValue(path);
-    if (isPlainObject(obj)) {
-      return [...Object.entries(obj as JsonObject)].map(([key, value]) => ({
+    if (isObject(obj)) {
+      return [...Object.entries(obj)].map(([key, value]) => ({
         key,
         value: this.jsonToDatum(value),
         ids: getIdsOfPath([...path, key], this.state.pathToId),
@@ -369,7 +379,7 @@ export default class InMemorySaveState<
     return [];
   }
 
-  listArray(path: PathArray): readonly NonEmptyJsonCacheDatum[] {
+  async listArray(path: PathArray): Promise<readonly NonEmptyJsonCacheDatum[]> {
     const arr = this.lookupValue(path);
     if (Array.isArray(arr)) {
       return arr.map((value, key) => ({
@@ -380,12 +390,12 @@ export default class InMemorySaveState<
     return [];
   }
 
-  insert(
+  async insert(
     ops: Op[]
-  ): {
+  ): Promise<{
     changes: readonly Change[];
     failures: readonly Failure[];
-  } {
+  }> {
     ops = ops
       .filter(({ id }) => idIndex(id, this.state.ops, true) < 0)
       .sort((x, y) => idCompare(x.id, y.id));
@@ -397,29 +407,33 @@ export default class InMemorySaveState<
     const failures: Failure[] = [];
     let insertAfterState = this.state;
     if (idCompare(last(this.state.ops)?.id || ZERO_ID, ops[0].id) >= 0) {
-      const opsAfterInsert = this.rewind(ops[0].id);
-      insertAfterState = opsAfterInsert.reduce((state, op) => {
-        while (ops.length && idCompare(ops[0].id, op.id) < 0) {
-          const nextResult = applyOp(ops.shift() as Op, state);
+      const opsAfterInsert = await this.rewind(ops[0].id);
+      insertAfterState = await reduceAsync(
+        opsAfterInsert,
+        this.state,
+        async (state, op) => {
+          while (ops.length && idCompare(ops[0].id, op.id) < 0) {
+            const nextResult = await applyOp(ops.shift() as Op, state);
+            changes.push(...nextResult.changes);
+            failures.push(...nextResult.failures);
+            state = nextResult.state;
+          }
+          const nextResult = await applyOp(op, state);
           changes.push(...nextResult.changes);
-          failures.push(...nextResult.failures);
-          state = nextResult.state;
+          return nextResult.state;
         }
-        const nextResult = applyOp(op, state);
-        changes.push(...nextResult.changes);
-        return nextResult.state;
-      }, this.state);
+      );
     }
-    this.state = ops.reduce((state, op) => {
-      const nextResult = applyOp(op, state);
+    this.state = await reduceAsync(ops, insertAfterState, async (state, op) => {
+      const nextResult = await applyOp(op, state);
       changes.push(...nextResult.changes);
       failures.push(...nextResult.failures);
       return nextResult.state;
-    }, insertAfterState);
+    });
     return { changes, failures };
   }
 
-  ops(maxLength?: number): readonly Op[] {
+  async ops(maxLength?: number): Promise<readonly Op[]> {
     if (maxLength == null) {
       return this.state.ops;
     }
@@ -429,7 +443,7 @@ export default class InMemorySaveState<
     );
   }
 
-  failures(maxLength?: number): readonly Failure[] {
+  async failures(maxLength?: number): Promise<readonly Failure[]> {
     if (maxLength == null) {
       return this.state.failures;
     }
@@ -439,7 +453,7 @@ export default class InMemorySaveState<
     );
   }
 
-  rewind(latestId: Id): readonly Op[] {
+  async rewind(latestId: Id): Promise<readonly Op[]> {
     for (let i = this.state.savePoints.length - 1; i >= 0; i--) {
       const savePoint = this.state.savePoints[i];
       if (idCompare(savePoint.id, latestId) <= 0) {
@@ -451,15 +465,16 @@ export default class InMemorySaveState<
         const savePointIndex = idIndex(savePoint.id, this.state.ops, true) + 1;
         const droppedOps = this.state.ops.slice(rewindIndex);
         const appliedOps = this.state.ops.slice(savePointIndex, rewindIndex);
-        this.state = appliedOps.reduce(
-          (state, op) => applyOp(op, state).state,
+        this.state = await reduceAsync(
+          appliedOps,
           {
             ...this.state,
             ...savePoint,
             ops: this.state.ops.slice(0, savePointIndex),
             failures: this.state.failures.slice(0, failureRewindIndex),
             savePoints: this.state.savePoints.slice(0, i + 1),
-          }
+          } as State<Promise<Metadata>>,
+          async (state, op) => (await applyOp(op, state)).state
         );
         return droppedOps;
       }
@@ -471,7 +486,7 @@ export default class InMemorySaveState<
     );
   }
 
-  savePoints(): readonly SavePoint[] {
+  async savePoints(): Promise<readonly SavePoint[]> {
     return this.state.savePoints.map(({ id, hash, width, latestIndexes }) => ({
       id,
       hash,
@@ -480,15 +495,22 @@ export default class InMemorySaveState<
     }));
   }
 
-  metadata(): Metadata {
+  async metadata(): Promise<Metadata> {
     return this.state.metadata;
   }
 
-  setMetadata(metadata: Metadata): void {
-    this.state = { ...this.state, metadata: { ...metadata } };
+  async setMetadata(metadata: Metadata): Promise<void> {
+    this.state = { ...this.state, metadata: Promise.resolve({ ...metadata }) };
   }
 
-  stateSummary(): StateSummary {
+  async initMetadata(initializer: () => Promise<Metadata>): Promise<void> {
+    if (this.onInitMetadata) {
+      this.onInitMetadata(await initializer());
+      delete this.onInitMetadata;
+    }
+  }
+
+  async stateSummary(): Promise<StateSummary> {
     return { hash: this.state.hash, latestIndexes: this.state.latestIndexes };
   }
 }

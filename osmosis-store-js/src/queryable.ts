@@ -10,5 +10,5 @@ export default interface Queryable {
 
   subscribe(query: JsonPath, callback: (json: Json[]) => void): Cancelable;
 
-  queryOnce(query: JsonPath, vars: Vars): Json[];
+  queryOnce(query: JsonPath, vars: Vars): Promise<Json[]>;
 }

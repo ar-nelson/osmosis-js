@@ -282,9 +282,13 @@ describe('JsonPath', function () {
     },
   };
 
-  it('should query an existing literal path', function () {
+  it('should query an existing literal path', async function () {
     expect(
-      queryPaths(compileJsonPath('$.foo.bar'), fooBarJson, JsonJsonAdapter)
+      await queryPaths(
+        compileJsonPath('$.foo.bar'),
+        fooBarJson,
+        JsonJsonAdapter
+      )
     ).to.deep.equal({
       existing: [['foo', 'bar']],
       potential: [],
@@ -292,9 +296,13 @@ describe('JsonPath', function () {
     });
   });
 
-  it('should query a potential literal path', function () {
+  it('should query a potential literal path', async function () {
     expect(
-      queryPaths(compileJsonPath('$.foo.qux'), fooBarJson, JsonJsonAdapter)
+      await queryPaths(
+        compileJsonPath('$.foo.qux'),
+        fooBarJson,
+        JsonJsonAdapter
+      )
     ).to.deep.equal({
       existing: [],
       potential: [['foo', 'qux']],
@@ -302,9 +310,13 @@ describe('JsonPath', function () {
     });
   });
 
-  it('should report a failure on a query for a missing literal path', function () {
+  it('should report a failure on a query for a missing literal path', async function () {
     expect(
-      queryPaths(compileJsonPath('$.baz.qux'), fooBarJson, JsonJsonAdapter)
+      await queryPaths(
+        compileJsonPath('$.baz.qux'),
+        fooBarJson,
+        JsonJsonAdapter
+      )
     ).to.deep.equal({
       existing: [],
       potential: [],
@@ -312,14 +324,18 @@ describe('JsonPath', function () {
     });
   });
 
-  it('should extract a value with queryValues', function () {
+  it('should extract a value with queryValues', async function () {
     expect(
-      queryValues(compileJsonPath('$.foo.bar'), fooBarJson, JsonJsonAdapter)
+      await queryValues(
+        compileJsonPath('$.foo.bar'),
+        fooBarJson,
+        JsonJsonAdapter
+      )
     ).to.deep.equal([1]);
   });
 
-  it('should query multiple existing paths with ..', function () {
-    const { existing, potential, failures } = queryPaths(
+  it('should query multiple existing paths with ..', async function () {
+    const { existing, potential, failures } = await queryPaths(
       compileJsonPath('$..bar'),
       fooBarJson,
       JsonJsonAdapter
@@ -333,8 +349,10 @@ describe('JsonPath', function () {
       .and.to.deep.contain(['foo', 'bar']);
   });
 
-  it('should extract multiple values with queryValues and ..', function () {
-    expect(queryValues(compileJsonPath('$..bar'), fooBarJson, JsonJsonAdapter))
+  it('should extract multiple values with queryValues and ..', async function () {
+    expect(
+      await queryValues(compileJsonPath('$..bar'), fooBarJson, JsonJsonAdapter)
+    )
       .to.have.length(3)
       .and.to.contain(1)
       .and.to.contain(4)

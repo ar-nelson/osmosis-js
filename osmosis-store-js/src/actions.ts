@@ -1,19 +1,19 @@
-import flatMap from 'lodash.flatmap';
-import last from 'lodash.last';
 import { Id } from './id';
 import {
-  JsonAdapter,
-  JsonJsonAdapter,
   followPath,
   isJsonEqual,
+  JsonAdapter,
+  JsonJsonAdapter,
+  toJsonWithAdapter,
 } from './json-adapter';
-import { Failure, Json, PathArray, AbsolutePathArray } from './types';
 import {
-  CompiledJsonPath,
   CompiledJsonIdPath,
-  queryPaths,
+  CompiledJsonPath,
   jsonPathToString,
+  queryPaths,
 } from './jsonpath';
+import { AbsolutePathArray, Failure, Json, PathArray } from './types';
+import { flatMap, flatMapAsync, last } from './utils';
 
 export type Change =
   | {
@@ -75,7 +75,7 @@ function isValidPath(path: PathArray): path is AbsolutePathArray {
   return !!path.length;
 }
 
-function fillNulls<T>(
+async function fillNulls<T>(
   changes: Change[],
   path: AbsolutePathArray,
   json: T,
@@ -86,8 +86,8 @@ function fillNulls<T>(
     return;
   }
   const parent = path.slice(0, path.length - 1);
-  const { value } = followPath(parent, json, adapter);
-  const length = adapter.arrayLength(value as T);
+  const { value } = await followPath(parent, json, adapter);
+  const length = await adapter.arrayLength(value as T);
   if (length == null || length >= index) {
     return;
   }
@@ -104,32 +104,32 @@ export function actionToChanges<T>(
   action: ScalarAction<CompiledJsonPath>,
   json: T,
   adapter: JsonAdapter<T>
-): {
+): Promise<{
   failures: Failure[];
   changes: Change[];
-};
+}>;
 
 export function actionToChanges<T>(
   action: ScalarAction<CompiledJsonPath | CompiledJsonIdPath>,
   json: T,
   adapter: JsonAdapter<T>,
   idToPath: (id: Id) => PathArray | undefined
-): {
+): Promise<{
   failures: Failure[];
   changes: Change[];
-};
+}>;
 
-export function actionToChanges<T>(
+export async function actionToChanges<T>(
   action: ScalarAction<CompiledJsonPath | CompiledJsonIdPath>,
   json: T,
   adapter: JsonAdapter<T>,
   idToPath: (id: Id) => PathArray | undefined = () => undefined
-): {
+): Promise<{
   failures: Failure[];
   changes: Change[];
-} {
+}> {
   const changes: Change[] = [];
-  const { existing, potential, failures } = queryPaths(
+  const { existing, potential, failures } = await queryPaths(
     action.path,
     json,
     adapter,
@@ -139,7 +139,7 @@ export function actionToChanges<T>(
     case 'Set':
       for (const path of [...existing, ...potential]) {
         if (isValidPath(path)) {
-          fillNulls(changes, path, json, adapter);
+          await fillNulls(changes, path, json, adapter);
           changes.push({ type: 'Put', path, value: action.payload });
         } else {
           failures.push({ message: 'Set: cannot set root', path });
@@ -155,8 +155,8 @@ export function actionToChanges<T>(
               0,
               path.length - 1
             ) as unknown) as AbsolutePathArray;
-            const { value } = followPath(parent, json, adapter);
-            const length = adapter.arrayLength(value as T);
+            const { value } = await followPath(parent, json, adapter);
+            const length = await adapter.arrayLength(value as T);
             if (length && length > index + 1) {
               for (let i = index + 1; i < length; i++) {
                 changes.push({
@@ -176,7 +176,7 @@ export function actionToChanges<T>(
       break;
     case 'Add':
       for (const path of existing) {
-        const { found, value } = followPath(path, json, adapter);
+        const { found, value } = await followPath(path, json, adapter);
         if (
           found &&
           isValidPath(path) &&
@@ -185,7 +185,7 @@ export function actionToChanges<T>(
           changes.push({
             type: 'Put',
             path,
-            value: (adapter.toJson(value as T) as number) + action.payload,
+            value: (adapter.numberValue(value as T) as number) + action.payload,
           });
         } else {
           failures.push({ message: 'Add: not a number', path });
@@ -194,7 +194,7 @@ export function actionToChanges<T>(
       break;
     case 'Multiply':
       for (const path of existing) {
-        const { found, value } = followPath(path, json, adapter);
+        const { found, value } = await followPath(path, json, adapter);
         if (
           found &&
           isValidPath(path) &&
@@ -203,7 +203,7 @@ export function actionToChanges<T>(
           changes.push({
             type: 'Put',
             path,
-            value: (adapter.toJson(value as T) as number) * action.payload,
+            value: (adapter.numberValue(value as T) as number) * action.payload,
           });
         } else {
           failures.push({ message: 'Multiply: not a number', path });
@@ -213,11 +213,11 @@ export function actionToChanges<T>(
     case 'InitArray':
       for (const path of [...existing, ...potential]) {
         if (isValidPath(path)) {
-          const { found, value } = followPath(path, json, adapter);
+          const { found, value } = await followPath(path, json, adapter);
           if (found && adapter.typeOf(value as T) === 'array') {
             changes.push({ type: 'Touch', path });
           } else {
-            fillNulls(changes, path, json, adapter);
+            await fillNulls(changes, path, json, adapter);
             changes.push({ type: 'Put', path, value: [] });
           }
         } else {
@@ -228,11 +228,11 @@ export function actionToChanges<T>(
     case 'InitObject':
       for (const path of [...existing, ...potential]) {
         if (isValidPath(path)) {
-          const { found, value } = followPath(path, json, adapter);
+          const { found, value } = await followPath(path, json, adapter);
           if (found && adapter.typeOf(value as T) === 'object') {
             changes.push({ type: 'Touch', path });
           } else {
-            fillNulls(changes, path, json, adapter);
+            await fillNulls(changes, path, json, adapter);
             changes.push({ type: 'Put', path, value: {} });
           }
         }
@@ -250,8 +250,8 @@ export function actionToChanges<T>(
             0,
             path.length - 1
           ) as unknown) as AbsolutePathArray;
-          const { value } = followPath(parent, json, adapter);
-          const length = adapter.arrayLength(value as T) || 0;
+          const { value } = await followPath(parent, json, adapter);
+          const length = (await adapter.arrayLength(value as T)) || 0;
           if (index > length) {
             index = length;
           }
@@ -277,12 +277,17 @@ export function actionToChanges<T>(
       break;
     case 'InsertUnique':
       nextPath: for (const path of existing) {
-        const { value } = followPath(path, json, adapter);
-        const length = adapter.arrayLength(value as T);
+        const { value } = await followPath(path, json, adapter);
+        const length = await adapter.arrayLength(value as T);
         if (length != null) {
-          for (const [i, element] of adapter.listEntries(json) || []) {
+          for (const [i, element] of (await adapter.listEntries(json)) || []) {
             if (
-              isJsonEqual(element, action.payload, adapter, JsonJsonAdapter)
+              await isJsonEqual(
+                element,
+                action.payload,
+                adapter,
+                JsonJsonAdapter
+              )
             ) {
               changes.push({
                 type: 'Touch',
@@ -321,7 +326,7 @@ export function actionToChanges<T>(
       } else if (!isValidPath(destinations[0])) {
         failures.push({ message: 'Move: cannot move to root', path: [] });
       }
-      const { existing: sources, failures: sourceFailures } = queryPaths(
+      const { existing: sources, failures: sourceFailures } = await queryPaths(
         action.payload,
         json,
         adapter,
@@ -351,7 +356,7 @@ export function actionToChanges<T>(
       if (canMove) {
         const [to] = (potential as unknown) as AbsolutePathArray[];
         const [from] = (sources as unknown) as AbsolutePathArray[];
-        fillNulls(changes, to as AbsolutePathArray, json, adapter);
+        await fillNulls(changes, to as AbsolutePathArray, json, adapter);
         changes.push({ type: 'Move', from, to });
         const index = last(from);
         if (typeof index === 'number') {
@@ -359,8 +364,8 @@ export function actionToChanges<T>(
             0,
             from.length - 1
           ) as unknown) as AbsolutePathArray;
-          const { value } = followPath(parent, json, adapter);
-          const length = adapter.arrayLength(value as T);
+          const { value } = await followPath(parent, json, adapter);
+          const length = await adapter.arrayLength(value as T);
           if (length && length > index) {
             for (let i = index; i < length; i++) {
               changes.push({
@@ -375,7 +380,7 @@ export function actionToChanges<T>(
       break;
     }
     case 'Copy': {
-      const { existing: sources, failures: sourceFailures } = queryPaths(
+      const { existing: sources, failures: sourceFailures } = await queryPaths(
         action.payload,
         json,
         adapter,
@@ -397,11 +402,11 @@ export function actionToChanges<T>(
           failures.push({ message: 'Copy: cannot copy root', path: [] });
         } else {
           const [from] = sources;
-          const { value } = followPath(from, json, adapter);
-          const jsonValue = adapter.toJson(value as T);
+          const { value } = await followPath(from, json, adapter);
+          const jsonValue = await toJsonWithAdapter(value as T, adapter);
           for (const path of [...existing, ...potential]) {
             if (isValidPath(path)) {
-              fillNulls(changes, path, json, adapter);
+              await fillNulls(changes, path, json, adapter);
               changes.push({ type: 'Put', path, value: jsonValue });
             } else {
               failures.push({ message: 'Copy: cannot copy to root', path: [] });
@@ -443,35 +448,35 @@ export function mapAction<T, U>(
   }
 }
 
-export function mapActionToList<T, U>(
+export async function mapActionToList<T, U>(
   action: Action<T>,
-  f: (path: T) => U[]
-): Action<U>[] {
+  f: (path: T) => Promise<U[]>
+): Promise<Action<U>[]> {
   switch (action.action) {
     case 'Transaction':
       return [
         {
           ...action,
-          payload: flatMap(
+          payload: await flatMapAsync(
             action.payload,
-            (a) => mapActionToList(a, f) as ScalarAction<U>[]
+            (a) => mapActionToList(a, f) as Promise<ScalarAction<U>[]>
           ),
         },
       ];
     case 'Copy': {
-      const path = f(action.path);
+      const path = await f(action.path);
       if (path.length !== 1) {
         throw new Error('Copy action must have exactly one source path');
       }
-      return flatMap(f(action.payload), (payload) => ({
+      return flatMap(await f(action.payload), (payload) => ({
         ...action,
         path: path[0],
         payload,
       }));
     }
     case 'Move': {
-      const path = f(action.path);
-      const payload = f(action.payload);
+      const path = await f(action.path);
+      const payload = await f(action.payload);
       if (path.length !== 1) {
         throw new Error('Move action must have exactly one source path');
       }
@@ -481,6 +486,6 @@ export function mapActionToList<T, U>(
       return [{ ...action, path: path[0], payload: payload[0] }];
     }
     default:
-      return flatMap(f(action.path), (path) => ({ ...action, path }));
+      return flatMap(await f(action.path), (path) => ({ ...action, path }));
   }
 }

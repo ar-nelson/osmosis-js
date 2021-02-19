@@ -1,6 +1,6 @@
-import isPlainObject from 'lodash.isplainobject';
-import { Json, JsonObject, JsonScalar, PathArray } from './types';
 import { Draft } from 'immer';
+import { Json, JsonScalar, PathArray } from './types';
+import { isObject } from './utils';
 
 export const NO_RESULT = Object.freeze({
   canExist: false,
@@ -17,11 +17,12 @@ export interface JsonAdapter<T> {
   booleanValue(t: T): boolean;
   numberValue(t: T): number | undefined;
   stringValue(t: T): string | undefined;
-  arrayLength(t: T): number | undefined;
-  getIndex(t: T, index: number): JsonAdapterResult<T>;
-  getKey(t: T, key: string): JsonAdapterResult<T>;
-  listEntries(t: T): readonly (readonly [string | number, T])[] | undefined;
-  toJson(t: T): Json;
+  arrayLength(t: T): Promise<number | undefined>;
+  getIndex(t: T, index: number): Promise<JsonAdapterResult<T>>;
+  getKey(t: T, key: string): Promise<JsonAdapterResult<T>>;
+  listEntries(
+    t: T
+  ): Promise<readonly (readonly [string | number, T])[] | undefined>;
 }
 
 export const JsonJsonAdapter: JsonAdapter<Json> = Object.freeze({
@@ -32,7 +33,7 @@ export const JsonJsonAdapter: JsonAdapter<Json> = Object.freeze({
       return 'null';
     } else if (Array.isArray(json)) {
       return 'array';
-    } else if (isPlainObject(json)) {
+    } else if (isObject(json)) {
       return 'object';
     } else {
       return typeof json as 'boolean' | 'number' | 'string';
@@ -51,11 +52,11 @@ export const JsonJsonAdapter: JsonAdapter<Json> = Object.freeze({
     return typeof json === 'string' ? json : undefined;
   },
 
-  arrayLength(json: Json): number | undefined {
+  async arrayLength(json: Json): Promise<number | undefined> {
     return Array.isArray(json) ? json.length : undefined;
   },
 
-  getIndex(json: Json, index: number): JsonAdapterResult<Json> {
+  async getIndex(json: Json, index: number): Promise<JsonAdapterResult<Json>> {
     if (Array.isArray(json)) {
       if (index >= 0 && index < json.length) {
         return { canExist: true, exists: true, value: json[index] };
@@ -65,43 +66,29 @@ export const JsonJsonAdapter: JsonAdapter<Json> = Object.freeze({
     return NO_RESULT;
   },
 
-  getKey(json: Json, key: string): JsonAdapterResult<Json> {
-    if (isPlainObject(json)) {
+  async getKey(json: Json, key: string): Promise<JsonAdapterResult<Json>> {
+    if (isObject(json)) {
       if (Object.prototype.hasOwnProperty.call(json, key)) {
-        return {
-          canExist: true,
-          exists: true,
-          value: (json as JsonObject)[key],
-        };
+        return { canExist: true, exists: true, value: json[key] };
       }
       return { canExist: true, exists: false, value: undefined };
     }
     return NO_RESULT;
   },
 
-  listEntries(
+  async listEntries(
     json: Json
-  ): readonly (readonly [string | number, Json])[] | undefined {
+  ): Promise<readonly (readonly [string | number, Json])[] | undefined> {
     if (Array.isArray(json)) {
       return json.map((v, k) => [k, v]);
-    } else if (isPlainObject(json)) {
-      return [...Object.entries(json as JsonObject)];
+    } else if (isObject(json)) {
+      return [...Object.entries(json)];
     }
     return undefined;
   },
-
-  toJson(json: Json): Json {
-    return json;
-  },
 });
 
-export const JsonDraftAdapter: JsonAdapter<Draft<Json>> = {
-  ...(JsonJsonAdapter as JsonAdapter<Draft<Json>>),
-
-  toJson(t: Draft<Json>): Json {
-    return JSON.parse(JSON.stringify(t));
-  },
-};
+export const JsonDraftAdapter = JsonJsonAdapter as JsonAdapter<Draft<Json>>;
 
 export class PlusScalarAdapter<T> implements JsonAdapter<JsonScalar | T> {
   constructor(private readonly childAdapter: JsonAdapter<T>) {}
@@ -167,7 +154,7 @@ export class PlusScalarAdapter<T> implements JsonAdapter<JsonScalar | T> {
     }
   }
 
-  arrayLength(t: JsonScalar | T): number | undefined {
+  async arrayLength(t: JsonScalar | T): Promise<number | undefined> {
     if (t === null) {
       return undefined;
     }
@@ -181,7 +168,10 @@ export class PlusScalarAdapter<T> implements JsonAdapter<JsonScalar | T> {
     }
   }
 
-  getIndex(t: JsonScalar | T, index: number): JsonAdapterResult<T> {
+  async getIndex(
+    t: JsonScalar | T,
+    index: number
+  ): Promise<JsonAdapterResult<T>> {
     if (t === null) {
       return NO_RESULT;
     }
@@ -195,7 +185,7 @@ export class PlusScalarAdapter<T> implements JsonAdapter<JsonScalar | T> {
     }
   }
 
-  getKey(t: JsonScalar | T, key: string): JsonAdapterResult<T> {
+  async getKey(t: JsonScalar | T, key: string): Promise<JsonAdapterResult<T>> {
     if (t === null) {
       return NO_RESULT;
     }
@@ -209,9 +199,9 @@ export class PlusScalarAdapter<T> implements JsonAdapter<JsonScalar | T> {
     }
   }
 
-  listEntries(
+  async listEntries(
     t: JsonScalar | T
-  ): readonly (readonly [string | number, T])[] | undefined {
+  ): Promise<readonly (readonly [string | number, T])[] | undefined> {
     if (t === null) {
       return undefined;
     }
@@ -224,33 +214,18 @@ export class PlusScalarAdapter<T> implements JsonAdapter<JsonScalar | T> {
         return this.childAdapter.listEntries(t);
     }
   }
-
-  toJson(t: JsonScalar | T): Json {
-    if (t === null) {
-      return null;
-    }
-    switch (typeof t) {
-      case 'boolean':
-      case 'number':
-      case 'string':
-        return t;
-      default:
-        return this.childAdapter.toJson(t);
-    }
-  }
 }
 
-export function followPath<T>(
+export async function followPath<T>(
   path: PathArray,
   json: T,
   adapter: JsonAdapter<T>
-): { found: boolean; longestSubpath: PathArray; value?: T } {
+): Promise<{ found: boolean; longestSubpath: PathArray; value?: T }> {
   const longestSubpath: (string | number)[] = [];
   for (const key of path) {
-    const { exists, value } =
-      typeof key === 'number'
-        ? adapter.getIndex(json, key)
-        : adapter.getKey(json, key);
+    const { exists, value } = await (typeof key === 'number'
+      ? adapter.getIndex(json, key)
+      : adapter.getKey(json, key));
     if (!exists) {
       return { found: false, longestSubpath };
     }
@@ -260,12 +235,42 @@ export function followPath<T>(
   return { found: true, longestSubpath, value: json };
 }
 
-export function isJsonEqual<T, U>(
+export async function toJsonWithAdapter<T>(
+  t: T,
+  adapter: JsonAdapter<T>
+): Promise<Json> {
+  switch (adapter.typeOf(t)) {
+    case 'null':
+      return null;
+    case 'boolean':
+      return adapter.booleanValue(t);
+    case 'number':
+      return adapter.numberValue(t) as number;
+    case 'string':
+      return adapter.stringValue(t) as string;
+    case 'array': {
+      const out: Json[] = [];
+      for (const [key, value] of (await adapter.listEntries(t)) || []) {
+        out[key as number] = await toJsonWithAdapter(value, adapter);
+      }
+      return out;
+    }
+    case 'object': {
+      const out: { [key: string]: Json } = {};
+      for (const [key, value] of (await adapter.listEntries(t)) || []) {
+        out[key as string] = await toJsonWithAdapter(value, adapter);
+      }
+      return out;
+    }
+  }
+}
+
+export async function isJsonEqual<T, U>(
   lhs: T,
   rhs: U,
   ladapter: JsonAdapter<T>,
   radapter: JsonAdapter<U>
-): boolean {
+): Promise<boolean> {
   const ltype = ladapter.typeOf(lhs);
   const rtype = radapter.typeOf(rhs);
   if (ltype !== rtype) {
@@ -273,8 +278,8 @@ export function isJsonEqual<T, U>(
   }
   switch (ltype) {
     case 'object': {
-      const lentries = [...(ladapter.listEntries(lhs) || [])];
-      const rentries = [...(radapter.listEntries(rhs) || [])];
+      const lentries = [...((await ladapter.listEntries(lhs)) || [])];
+      const rentries = [...((await radapter.listEntries(rhs)) || [])];
       if (lentries.length !== rentries.length) {
         return false;
       }
@@ -283,7 +288,12 @@ export function isJsonEqual<T, U>(
       for (let i = 0; i < lentries.length; i++) {
         if (
           lentries[i][0] !== rentries[i][0] ||
-          !isJsonEqual(lentries[i][1], rentries[i][1], ladapter, radapter)
+          !(await isJsonEqual(
+            lentries[i][1],
+            rentries[i][1],
+            ladapter,
+            radapter
+          ))
         ) {
           return false;
         }
@@ -291,19 +301,29 @@ export function isJsonEqual<T, U>(
       return true;
     }
     case 'array': {
-      const lentries = ladapter.listEntries(lhs) || [];
-      const rentries = radapter.listEntries(rhs) || [];
+      const lentries = (await ladapter.listEntries(lhs)) || [];
+      const rentries = (await radapter.listEntries(rhs)) || [];
       if (lentries.length !== rentries.length) {
         return false;
       }
       for (let i = 0; i < lentries.length; i++) {
-        if (!isJsonEqual(lentries[i][1], rentries[i][1], ladapter, radapter)) {
+        if (
+          !(await isJsonEqual(
+            lentries[i][1],
+            rentries[i][1],
+            ladapter,
+            radapter
+          ))
+        ) {
           return false;
         }
       }
       return true;
     }
     default:
-      return ladapter.toJson(lhs) === radapter.toJson(rhs);
+      return (
+        (await toJsonWithAdapter(lhs, ladapter)) ===
+        (await toJsonWithAdapter(rhs, radapter))
+      );
   }
 }
