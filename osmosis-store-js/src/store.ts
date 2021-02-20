@@ -31,8 +31,8 @@ export default class Store implements Dispatchable<JsonPathAction>, Queryable {
 
   constructor(public readonly saveState: SaveState<{ readonly peerId: Uuid }>) {
     this.cache = new JsonCache(saveState);
-    this.uuid = saveState.metadata().then((x) => x.peerId);
-    saveState.stateSummary().then(({ latestIndexes }) => {
+    this.uuid = saveState.metadata.then((x) => x.peerId);
+    saveState.stateSummary.then(({ latestIndexes }) => {
       this.nextIndex =
         [...Object.values(latestIndexes)].reduce((x, y) => Math.max(x, y), 0) +
         1;
@@ -148,15 +148,30 @@ export default class Store implements Dispatchable<JsonPathAction>, Queryable {
     );
   }
 
+  opsRange(earliestId: Id | null, latestId: Id | null): Promise<readonly Op[]> {
+    return this.saveState.opsRange(earliestId, latestId);
+  }
+
+  failuresRange(
+    earliestId: Id | null,
+    latestId: Id | null
+  ): Promise<readonly Failure[]> {
+    return this.saveState.failuresRange(earliestId, latestId);
+  }
+
   get ops(): Promise<readonly Op[]> {
-    return this.saveState.ops();
+    return this.saveState.ops;
+  }
+
+  get failures(): Promise<readonly Failure[]> {
+    return this.saveState.failures;
   }
 
   get savePoints(): Promise<readonly SavePoint[]> {
-    return this.saveState.savePoints();
+    return this.saveState.savePoints;
   }
 
   get stateSummary(): Promise<StateSummary> {
-    return this.saveState.stateSummary();
+    return this.saveState.stateSummary;
   }
 }

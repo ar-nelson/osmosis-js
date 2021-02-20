@@ -38,7 +38,7 @@ describe('Store', function () {
       id: { author: UUID1, index: 1 },
     };
     expect(await store.ops).to.deep.equal([op1]);
-    expect(await saveState.ops()).to.deep.equal([op1]);
+    expect(await saveState.ops).to.deep.equal([op1]);
     await store.dispatch({
       action: 'Set',
       path: '$.bar',
@@ -51,7 +51,7 @@ describe('Store', function () {
       id: { author: UUID1, index: 2 },
     };
     expect(await store.ops).to.deep.equal([op1, op2]);
-    expect(await saveState.ops()).to.deep.equal([op1, op2]);
+    expect(await saveState.ops).to.deep.equal([op1, op2]);
   });
 
   it('should create an initial save point', async function () {
@@ -69,9 +69,9 @@ describe('Store', function () {
       latestIndexes: {},
     };
     expect(await store.savePoints).to.have.length(1);
-    expect(await saveState.savePoints()).to.have.length(1);
+    expect(await saveState.savePoints).to.have.length(1);
     expect((await store.savePoints)[0]).to.deep.include(savePoint);
-    expect((await saveState.savePoints())[0]).to.deep.include(savePoint);
+    expect((await saveState.savePoints)[0]).to.deep.include(savePoint);
   });
 
   it('should create a new save point every 4 ops', async function () {
@@ -123,7 +123,7 @@ describe('Store', function () {
       },
     ];
     expect(await store.savePoints).to.deep.equal(savePoints);
-    expect(await saveState.savePoints()).to.deep.equal(savePoints);
+    expect(await saveState.savePoints).to.deep.equal(savePoints);
   });
 
   it('should reference existing locations by id', async function () {
@@ -303,19 +303,19 @@ describe('Store', function () {
       },
       'stores do not match after merge'
     );
-    expect(await store1.saveState.ops()).to.deep.equal(
+    expect(await store1.saveState.ops).to.deep.equal(
       await store1.ops,
       'save state ops list does not match (store 1)'
     );
-    expect(await store1.saveState.savePoints()).to.deep.equal(
+    expect(await store1.saveState.savePoints).to.deep.equal(
       await store1.savePoints,
       'save state save point list does not match (store 1)'
     );
-    expect(await store2.saveState.ops()).to.deep.equal(
+    expect(await store2.saveState.ops).to.deep.equal(
       await store2.ops,
       'save state ops list does not match (store 2)'
     );
-    expect(await store2.saveState.savePoints()).to.deep.equal(
+    expect(await store2.saveState.savePoints).to.deep.equal(
       await store2.savePoints,
       'save state save point list does not match (store 2)'
     );

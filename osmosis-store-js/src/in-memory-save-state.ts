@@ -277,12 +277,12 @@ function updateSavePoints({
   return true;
 }
 
-export default class InMemorySaveState<Metadata>
-  implements SaveState<Metadata> {
+export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
   protected state: State<Promise<Metadata>>;
   private onInitMetadata?: (metadata: Metadata) => void;
 
   constructor(args: Partial<State<Metadata>>) {
+    super();
     this.state = {
       root: args.root ?? {},
       idToPath: args.idToPath ?? {},
@@ -433,23 +433,23 @@ export default class InMemorySaveState<Metadata>
     return { changes, failures };
   }
 
-  async ops(maxLength?: number): Promise<readonly Op[]> {
-    if (maxLength == null) {
-      return this.state.ops;
-    }
+  async opsRange(
+    earliestId: Id | null,
+    latestId: Id | null
+  ): Promise<readonly Op[]> {
     return this.state.ops.slice(
-      Math.max(0, this.state.ops.length - maxLength),
-      this.state.ops.length
+      earliestId ? idIndex(earliestId, this.state.ops) : 0,
+      latestId ? idIndex(latestId, this.state.ops) : undefined
     );
   }
 
-  async failures(maxLength?: number): Promise<readonly Failure[]> {
-    if (maxLength == null) {
-      return this.state.failures;
-    }
+  async failuresRange(
+    earliestId: Id | null,
+    latestId: Id | null
+  ): Promise<readonly Failure[]> {
     return this.state.failures.slice(
-      Math.max(0, this.state.failures.length - maxLength),
-      this.state.failures.length
+      earliestId ? idIndex(earliestId, this.state.failures) : 0,
+      latestId ? idIndex(latestId, this.state.failures) : undefined
     );
   }
 
@@ -486,17 +486,19 @@ export default class InMemorySaveState<Metadata>
     );
   }
 
-  async savePoints(): Promise<readonly SavePoint[]> {
-    return this.state.savePoints.map(({ id, hash, width, latestIndexes }) => ({
-      id,
-      hash,
-      width,
-      latestIndexes,
-    }));
+  get savePoints(): Promise<readonly SavePoint[]> {
+    return Promise.resolve(
+      this.state.savePoints.map(({ id, hash, width, latestIndexes }) => ({
+        id,
+        hash,
+        width,
+        latestIndexes,
+      }))
+    );
   }
 
-  async metadata(): Promise<Metadata> {
-    return this.state.metadata;
+  get metadata(): Promise<Metadata> {
+    return Promise.resolve(this.state.metadata);
   }
 
   async setMetadata(metadata: Metadata): Promise<void> {
@@ -510,7 +512,10 @@ export default class InMemorySaveState<Metadata>
     }
   }
 
-  async stateSummary(): Promise<StateSummary> {
-    return { hash: this.state.hash, latestIndexes: this.state.latestIndexes };
+  get stateSummary(): Promise<StateSummary> {
+    return Promise.resolve({
+      hash: this.state.hash,
+      latestIndexes: this.state.latestIndexes,
+    });
   }
 }

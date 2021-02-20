@@ -2,12 +2,12 @@ import { expect } from 'chai';
 import { before, beforeEach, describe, it } from 'mocha';
 import * as Monocypher from 'monocypher-wasm';
 import * as uuid from 'uuid';
+import { Change } from '../src/actions';
 import { idCompare, nextStateHash, ZERO_STATE_HASH } from '../src/id';
 import InMemorySaveState from '../src/in-memory-save-state';
 import { JsonCacheStructureMarker } from '../src/json-cache';
 import { Op, StateSummary } from '../src/save-state';
-import { Change } from '../src/actions';
-import { Key, Index, Put, Delete, Touch, Move } from './mock-constructors';
+import { Index, Key, Move, Put, Touch } from './mock-constructors';
 
 describe('SaveState', function () {
   let saveState: InMemorySaveState<{}>;
@@ -66,11 +66,9 @@ describe('SaveState', function () {
             expect(changes).to.deep.include(c);
           }
         }
-        expect(await saveState.ops()).to.deep.equal(sorted);
-        expect(await saveState.failures()).to.be.empty;
-        expect(await saveState.stateSummary()).to.deep.equal(
-          await stateSummary
-        );
+        expect(await saveState.ops).to.deep.equal(sorted);
+        expect(await saveState.failures).to.be.empty;
+        expect(await saveState.stateSummary).to.deep.equal(await stateSummary);
         await finalTests();
       });
 
@@ -84,11 +82,9 @@ describe('SaveState', function () {
             expect(changes).to.deep.equal(expectedChanges[i]);
           }
         }
-        expect(await saveState.ops()).to.deep.equal(sorted);
-        expect(await saveState.failures()).to.be.empty;
-        expect(await saveState.stateSummary()).to.deep.equal(
-          await stateSummary
-        );
+        expect(await saveState.ops).to.deep.equal(sorted);
+        expect(await saveState.failures).to.be.empty;
+        expect(await saveState.stateSummary).to.deep.equal(await stateSummary);
         await finalTests();
       });
 
@@ -102,11 +98,9 @@ describe('SaveState', function () {
             expect(changes).to.deep.include(c);
           }
         }
-        expect(await saveState.ops()).to.deep.equal(sorted);
-        expect(await saveState.failures()).to.be.empty;
-        expect(await saveState.stateSummary()).to.deep.equal(
-          await stateSummary
-        );
+        expect(await saveState.ops).to.deep.equal(sorted);
+        expect(await saveState.failures).to.be.empty;
+        expect(await saveState.stateSummary).to.deep.equal(await stateSummary);
         await finalTests();
       });
 
@@ -125,11 +119,9 @@ describe('SaveState', function () {
             expect(allChanges).to.deep.include(c);
           }
         }
-        expect(await saveState.ops()).to.deep.equal(sorted);
-        expect(await saveState.failures()).to.be.empty;
-        expect(await saveState.stateSummary()).to.deep.equal(
-          await stateSummary
-        );
+        expect(await saveState.ops).to.deep.equal(sorted);
+        expect(await saveState.failures).to.be.empty;
+        expect(await saveState.stateSummary).to.deep.equal(await stateSummary);
         await finalTests();
       });
     });

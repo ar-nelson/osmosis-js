@@ -1,9 +1,12 @@
-import { Action } from './actions';
+import { Action, Change } from './actions';
 import { CausalTree, Id } from './id';
-import { CacheSource } from './json-cache';
+import {
+  CacheSource,
+  JsonCacheDatum,
+  NonEmptyJsonCacheDatum,
+} from './json-cache';
 import { CompiledJsonIdPath, CompiledJsonPath } from './jsonpath';
-import { Failure } from './types';
-import { Change } from './actions';
+import { AbsolutePathArray, Failure, PathArray } from './types';
 
 export type Op = CausalTree & Action<CompiledJsonPath | CompiledJsonIdPath>;
 
@@ -17,19 +20,41 @@ export interface SavePoint extends StateSummary {
   readonly width: number;
 }
 
-export interface SaveState<Metadata> extends CacheSource {
-  insert(
+export abstract class SaveState<Metadata> implements CacheSource {
+  abstract insert(
     ops: Op[]
   ): Promise<{
     changes: readonly Change[];
     failures: readonly Failure[];
   }>;
-  ops(maxLength?: number): Promise<readonly Op[]>;
-  failures(maxLength?: number): Promise<readonly Failure[]>;
-  rewind(latestId: Id): Promise<readonly Op[]>;
-  savePoints(): Promise<readonly SavePoint[]>;
-  metadata(): Promise<Metadata>;
-  setMetadata(metadata: Metadata): Promise<void>;
-  initMetadata(initializer: () => Promise<Metadata>): Promise<void>;
-  stateSummary(): Promise<StateSummary>;
+  get ops(): Promise<readonly Op[]> {
+    return this.opsRange(null, null);
+  }
+  get failures(): Promise<readonly Failure[]> {
+    return this.failuresRange(null, null);
+  }
+  abstract opsRange(
+    earliestId: Id | null,
+    latestId: Id | null
+  ): Promise<readonly Op[]>;
+  abstract failuresRange(
+    earliestId: Id | null,
+    latestId: Id | null
+  ): Promise<readonly Failure[]>;
+  abstract rewind(latestId: Id): Promise<readonly Op[]>;
+  abstract savePoints: Promise<readonly SavePoint[]>;
+  abstract metadata: Promise<Metadata>;
+  abstract setMetadata(metadata: Metadata): Promise<void>;
+  abstract initMetadata(initializer: () => Promise<Metadata>): Promise<void>;
+  abstract stateSummary: Promise<StateSummary>;
+  abstract lookupByPath(path: PathArray): Promise<JsonCacheDatum>;
+  abstract lookupById(
+    id: Id
+  ): Promise<(JsonCacheDatum & { readonly path: AbsolutePathArray }) | null>;
+  abstract listObject(
+    path: PathArray
+  ): Promise<readonly (NonEmptyJsonCacheDatum & { key: string })[]>;
+  abstract listArray(
+    path: PathArray
+  ): Promise<readonly NonEmptyJsonCacheDatum[]>;
 }
