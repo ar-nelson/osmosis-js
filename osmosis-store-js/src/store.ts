@@ -1,5 +1,4 @@
 import { Change, mapActionToList } from './actions';
-import Dispatchable from './dispatchable';
 import { Id, Uuid } from './id';
 import { toJsonWithAdapter } from './json-adapter';
 import { JsonCache, JsonCacheAdapter } from './json-cache';
@@ -15,7 +14,7 @@ import {
 } from './jsonpath';
 import Queryable from './queryable';
 import { Op, SavePoint, SaveState, StateSummary } from './save-state';
-import { Cancelable, Failure, Json, OsmosisFailureError } from './types';
+import { Cancelable, Failure, Json } from './types';
 import { flatMap } from './utils';
 
 interface QueryListener {
@@ -23,7 +22,7 @@ interface QueryListener {
   readonly callback: (results: Json[]) => void;
 }
 
-export default class Store implements Dispatchable<JsonPathAction>, Queryable {
+export default class Store implements Queryable {
   private readonly cache: JsonCache;
   private readonly uuid: Promise<Uuid>;
   private nextIndex;
@@ -39,16 +38,12 @@ export default class Store implements Dispatchable<JsonPathAction>, Queryable {
     });
   }
 
-  dispatch(action: JsonPathAction, returnFailures: true): Promise<Failure[]>;
-  dispatch(
-    action: JsonPathAction,
-    returnFailures?: boolean
-  ): Promise<undefined>;
-
   async dispatch(
-    action: JsonPathAction,
-    returnFailures = false
-  ): Promise<readonly Failure[] | undefined> {
+    action: JsonPathAction
+  ): Promise<{
+    failures: readonly Failure[];
+    ops: readonly Op[];
+  }> {
     const processedActions = await mapActionToList(
       compileJsonPathAction(action),
       (path) =>
@@ -66,18 +61,11 @@ export default class Store implements Dispatchable<JsonPathAction>, Queryable {
       ops.push({ ...action, id });
     }
     const { failures } = await this.mergeOps(ops);
-    if (returnFailures) {
-      return failures;
-    } else if (failures.length) {
-      throw new OsmosisFailureError(
-        `dispatching action ${JSON.stringify(action)}`,
-        failures
-      );
-    }
+    return { failures, ops };
   }
 
   async mergeOps(
-    ops: Op[]
+    ops: readonly Op[]
   ): Promise<{ changes: readonly Change[]; failures: readonly Failure[] }> {
     const { changes, failures } = await this.saveState.insert(ops);
     const changedPaths = flatMap(changes, (change) => {

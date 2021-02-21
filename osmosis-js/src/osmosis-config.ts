@@ -1,3 +1,7 @@
+import { JsonPeerConfig } from '@nels.onl/osmosis-net-js';
+import { SaveState } from '@nels.onl/osmosis-store-js';
+import Logger from 'bunyan';
+
 export default interface OsmosisConfig {
   /**
    * A UUID that uniquely identifies this Osmosis app. Osmosis will only detect
@@ -13,18 +17,12 @@ export default interface OsmosisConfig {
   peerName?: string;
 
   /**
-   * A string describing how Osmosis data is persisted to disk. Supported
-   * values are 'none' (default), 'json', and 'sqlite'. More values may be added
-   * in the future.
+   * An instance of the SaveState class, which controls how the store's data is
+   * persisted to disk. InMemorySaveState (the default) and JsonFileSaveState
+   * are always available. Additional modules are planned for SqliteSaveState
+   * and LevelDbSaveState.
    */
-  persistence?: 'none' | 'json' | 'sqlite';
-
-  /**
-   * The file to save Osmosis data to. Will be read immediately, then written
-   * continually whenever the Osmosis state is changed. Required if persistence
-   * is not 'none'.
-   */
-  filename?: string;
+  saveState?: SaveState<JsonPeerConfig>;
 
   /**
    * An integer, defaults to 0. The minimum number of past actions that Osmosis
@@ -55,4 +53,7 @@ export default interface OsmosisConfig {
    * and sync. Defaults to true.
    */
   syncEnabled?: boolean;
+
+  /** A Bunyan logger object, which will replace Osmosis's default logger. */
+  log?: Logger;
 }

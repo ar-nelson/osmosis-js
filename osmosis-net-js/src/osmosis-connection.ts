@@ -1,7 +1,7 @@
 import Logger from 'bunyan';
-import TypedEventEmitter from './typed-event-emitter';
+import TypedEventEmitter from '@nels.onl/typed-event-emitter';
 import getPort from 'get-port';
-import { PeerConfig } from './peer-config';
+import { PeerConfig, PeerInfo } from './peer-config';
 import PeerFinder, { Heartbeat, HEARTBEAT_DELAY } from './peer-finder';
 import * as Monocypher from 'monocypher-wasm';
 import {
@@ -25,7 +25,7 @@ interface PairRequest {
 interface PairResponse {
   peerName: string;
   publicKey: string;
-  pin: number;
+  secret: string;
 }
 
 interface ConnectRequest {
@@ -81,9 +81,9 @@ export interface ConnectionEvents {
   peerDisappeared: (peer: Peer) => void;
   peerConnected: (peer: Peer) => void;
   peerDisconnected: (peer: Peer) => void;
-  pairRequest: (peer: { id: string; name: string }) => void;
+  pairRequest: (peer: { peerId: string; peerName: string }) => void;
   pairResponse: ({ peer: Peer, accepted: boolean }) => void;
-  pairPin: (pin: number) => void;
+  configUpdated: (config: PeerConfig) => void;
   start: () => void;
   stop: () => void;
 }
@@ -91,28 +91,43 @@ export interface ConnectionEvents {
 class OsmosisConnection<
   Methods extends MethodHandlers
 > extends TypedEventEmitter<ConnectionEvents> {
+  private _config: PeerConfig;
+  private _started: boolean;
   private peerFinder?: PeerFinder;
   private expireTimer?: ReturnType<typeof setInterval>;
   private gatewayPort?: number;
   private gatewayServer?: RpcServer<GatewayMethods>;
   private visiblePeers = new Map<string, VisiblePeer>();
   private connectedPeers = new Map<string, ConnectedPeer>();
-  private pairRequests = new Map<string, (pin: number | false) => void>();
+  private pairRequests = new Map<string, (secret: string | false) => void>();
 
   constructor(
-    public readonly config: PeerConfig,
+    config: PeerConfig,
     private readonly methodHandlers: Methods,
-    private readonly log: Logger = Logger.createLogger({ name: 'osmosis' })
+    private readonly log: Logger = Logger.createLogger({ name: 'osmosis' }),
+    autostart = true
   ) {
     super();
-    this.start();
+    this._config = config;
+    if (autostart) {
+      this.start();
+    }
+  }
+
+  get config(): PeerConfig {
+    return this._config;
+  }
+
+  get started(): boolean {
+    return this._started;
   }
 
   async start(): Promise<void> {
-    if (this.peerFinder || this.gatewayPort || this.gatewayServer) {
+    if (this.started) {
       this.log.warn('Tried to start connection when already started');
       return;
     }
+    this._started = true;
     this.log.info('Starting connection');
     this.gatewayPort = await getPort();
     this.gatewayServer = new RpcServer<GatewayMethods>({
@@ -150,10 +165,11 @@ class OsmosisConnection<
   }
 
   stop(): void {
-    if (!this.peerFinder && !this.gatewayPort && !this.gatewayServer) {
+    if (!this.started) {
       this.log.warn('Tried to stop connection when already stopped');
       return;
     }
+    this._started = false;
     this.log.info('Stopping connection');
     const gateway = this.gatewayServer;
     if (gateway) {
@@ -259,6 +275,14 @@ class OsmosisConnection<
     });
   }
 
+  private addPairedPeer(peer: PeerInfo): void {
+    this._config = {
+      ...this._config,
+      pairedPeers: [...this._config.pairedPeers, peer],
+    };
+    this.emit('configUpdated', this._config);
+  }
+
   private async onPair(
     request: PairRequest,
     { remotePeerId }: RpcMetadata
@@ -285,7 +309,7 @@ class OsmosisConnection<
       };
     }
 
-    const pin = await new Promise<number | false>((resolve) => {
+    const secret = await new Promise<string | false>((resolve) => {
       const timeout = setTimeout(() => {
         this.log.warn({ remotePeerId: remotePeerId }, 'Pair request timed out');
         resolve(false);
@@ -295,12 +319,15 @@ class OsmosisConnection<
         resolve(x);
       });
 
-      this.emit('pairRequest', { id: remotePeerId, name: request.peerName });
+      this.emit('pairRequest', {
+        peerId: remotePeerId,
+        peerName: request.peerName,
+      });
     });
 
     this.pairRequests.delete(remotePeerId);
 
-    if (pin === false) {
+    if (secret === false) {
       this.log.info({ remotePeerId }, 'Sending rejection for pair request');
       throw {
         code: 103,
@@ -308,16 +335,16 @@ class OsmosisConnection<
       };
     } else {
       this.log.info(
-        { remotePeerId, pin },
+        { remotePeerId, secret },
         'Sending acceptance for pair request'
       );
-      this.config.pairedPeers.push({
+      this.addPairedPeer({
         peerId: remotePeerId,
         peerName: request.peerName,
         publicKey,
       });
       return {
-        pin,
+        secret,
         peerName: this.config.peerName,
         publicKey: this.config.publicKey.toString('base64'),
       };
@@ -437,7 +464,7 @@ class OsmosisConnection<
       ) {
         continue;
       }
-      this.config.pairedPeers.push({
+      this.addPairedPeer({
         peerId,
         peerName,
         publicKey: Buffer.from(publicKey, 'base64'),
@@ -449,7 +476,7 @@ class OsmosisConnection<
     throw new Error('Not yet implemented');
   }
 
-  async pair(peerId: string): Promise<boolean> {
+  async pair(peerId: string, secret: string): Promise<boolean> {
     if (this.config.pairedPeers.find((p) => p.peerId === peerId)) {
       this.log.error(`Pairing failed: already paired with ${peerId}`);
       return false;
@@ -459,21 +486,13 @@ class OsmosisConnection<
       this.log.error(`Pairing failed: no visible peer with ID ${peerId}`);
       return false;
     }
-    const pinBytes = randomBytes(4);
-    const pin =
-      (pinBytes[0] * (1 << 24) +
-        pinBytes[1] * (1 << 16) +
-        pinBytes[2] * (1 << 8) +
-        pinBytes[3]) %
-      10000;
     this.log.info(
-      { pin },
+      { secret },
       'Sending pair request to %s at %s:%d',
       peerId,
       peer.remoteAddress,
       peer.port
     );
-    this.emit('pairPin', pin);
     assert(this.gatewayServer != null);
     const socket = await this.gatewayServer.connect(
       peer.port,
@@ -491,16 +510,16 @@ class OsmosisConnection<
         false,
         PAIR_TIMEOUT_MS + 1000
       );
-      if (response.pin !== pin) {
+      if (response.secret !== secret) {
         this.log.warn(
-          { expected: pin, received: response.pin },
-          'Incorrect pairing PIN from %s; pair request rejected',
+          { expected: secret, received: response.secret },
+          'Incorrect pairing secret from %s; pair request rejected',
           peerId
         );
         return false;
       }
       this.log.info('Pair request to %s was accepted', peerId);
-      this.config.pairedPeers.push({
+      this.addPairedPeer({
         peerId,
         peerName: peer.peerName,
         publicKey: peer.publicKey,
@@ -536,9 +555,9 @@ class OsmosisConnection<
     return accepted;
   }
 
-  acceptPairRequest(peerId: string, pin: number): boolean {
+  acceptPairRequest(peerId: string, secret: string): boolean {
     const resolver = this.pairRequests.get(peerId);
-    resolver?.(pin);
+    resolver?.(secret);
     return !!resolver;
   }
 
@@ -689,9 +708,28 @@ class OsmosisConnection<
     notification = false,
     timeout?: number
   ): Promise<any> {
+    if (!this._started) {
+      this.log.error(
+        { peerId, method },
+        'Cannot call JSON-RPC method: Connection is stopped'
+      );
+      if (notification) {
+        return Promise.resolve(undefined);
+      } else {
+        throw new Error('Cannot call JSON-RPC method: Connection is stopped');
+      }
+    }
     const peer = this.connectedPeers.get(peerId);
     if (!peer || !peer.client) {
-      throw new Error(`No connected peer with ID ${peerId}`);
+      this.log.error(
+        { peerId, method },
+        'Cannot call JSON-RPC method: Peer not connected'
+      );
+      if (notification) {
+        return Promise.resolve(undefined);
+      } else {
+        throw new Error('Cannot call JSON-RPC method: Peer not connected');
+      }
     }
     return peer.client.callMethod(method as any, params, notification, timeout);
   }

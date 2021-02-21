@@ -4,7 +4,7 @@ import * as Monocypher from 'monocypher-wasm';
 import { promisify } from 'util';
 import * as uuid from 'uuid';
 import { ZstdCodec } from 'zstd-codec';
-import TypedEventEmitter from './typed-event-emitter';
+import TypedEventEmitter from '@nels.onl/typed-event-emitter';
 import { UUID_LENGTH } from './utils';
 import Logger from 'bunyan';
 import assert from 'assert';

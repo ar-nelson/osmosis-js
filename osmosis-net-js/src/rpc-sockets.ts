@@ -17,7 +17,7 @@ import {
   JsonRpcError,
   Structural,
 } from './json-rpc';
-import TypedEventEmitter from './typed-event-emitter';
+import TypedEventEmitter from '@nels.onl/typed-event-emitter';
 import Logger from 'bunyan';
 
 export const DEFAULT_TIMEOUT_MS = 1000;

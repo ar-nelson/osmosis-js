@@ -18,6 +18,42 @@ export interface PeerConfig extends PeerInfo {
   readonly pairedPeers: PeerInfo[];
 }
 
+export interface JsonPeerInfo {
+  readonly peerId: string;
+  readonly peerName: string;
+  readonly publicKey: string;
+}
+
+export interface JsonPeerConfig extends JsonPeerInfo {
+  readonly appId: string;
+  readonly privateKey: string;
+  readonly pairedPeers: readonly JsonPeerInfo[];
+}
+
+export function serializePeerConfig(config: PeerConfig): JsonPeerConfig {
+  return {
+    ...config,
+    publicKey: config.publicKey.toString('base64'),
+    privateKey: config.privateKey.toString('base64'),
+    pairedPeers: config.pairedPeers.map((p) => ({
+      ...p,
+      publicKey: p.publicKey.toString('base64'),
+    })),
+  };
+}
+
+export function deserializePeerConfig(config: JsonPeerConfig): PeerConfig {
+  return {
+    ...config,
+    publicKey: Buffer.from(config.publicKey, 'base64'),
+    privateKey: Buffer.from(config.privateKey, 'base64'),
+    pairedPeers: config.pairedPeers.map((p) => ({
+      ...p,
+      publicKey: Buffer.from(p.publicKey, 'base64'),
+    })),
+  };
+}
+
 export async function generateConfig(
   appId: string = uuid.v4(),
   peerName: string = hostname()

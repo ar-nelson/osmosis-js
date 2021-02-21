@@ -11,7 +11,6 @@ export {
   Transaction,
   VoidAction,
 } from './actions';
-export { default as Dispatchable } from './dispatchable';
 export {
   CausalTree,
   Id,
@@ -52,7 +51,11 @@ export {
   splitIntoSingularPaths,
   Vars,
 } from './jsonpath';
-export { MetadataSource, MetaStore } from './meta-store';
+export {
+  ConstantMetadataSource,
+  MetadataSource,
+  MetaStore,
+} from './meta-store';
 export { default as Queryable } from './queryable';
 export { Op, SavePoint, SaveState, StateSummary } from './save-state';
 export { default as Store } from './store';

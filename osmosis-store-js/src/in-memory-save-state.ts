@@ -2,6 +2,7 @@ import assert from 'assert';
 import { Draft, produce } from 'immer';
 import { actionToChanges, Change, ScalarAction } from './actions';
 import {
+  CausalTree,
   Id,
   idCompare,
   idIndex,
@@ -114,6 +115,14 @@ function addIfAbsent<T>(a: T[], b: readonly T[]): void {
       a.push(x);
     }
   }
+}
+
+function idIndexAfter(id: Id, ops: readonly CausalTree[]): number {
+  const i = idIndex(id, ops);
+  if (idCompare(ops[i].id, id) === 0) {
+    return i + i;
+  }
+  return i;
 }
 
 async function applyChange(
@@ -439,7 +448,7 @@ export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
   ): Promise<readonly Op[]> {
     return this.state.ops.slice(
       earliestId ? idIndex(earliestId, this.state.ops) : 0,
-      latestId ? idIndex(latestId, this.state.ops) : undefined
+      latestId ? idIndexAfter(latestId, this.state.ops) : undefined
     );
   }
 
@@ -449,7 +458,7 @@ export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
   ): Promise<readonly Failure[]> {
     return this.state.failures.slice(
       earliestId ? idIndex(earliestId, this.state.failures) : 0,
-      latestId ? idIndex(latestId, this.state.failures) : undefined
+      latestId ? idIndexAfter(latestId, this.state.failures) : undefined
     );
   }
 

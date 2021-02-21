@@ -22,7 +22,7 @@ export interface SavePoint extends StateSummary {
 
 export abstract class SaveState<Metadata> implements CacheSource {
   abstract insert(
-    ops: Op[]
+    ops: readonly Op[]
   ): Promise<{
     changes: readonly Change[];
     failures: readonly Failure[];

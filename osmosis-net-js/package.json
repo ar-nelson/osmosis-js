@@ -12,12 +12,13 @@
     "directory": "osmosis-net-js"
   },
   "scripts": {
-    "build": "tsc && babel src --out-dir dist --extensions .ts && cp -f src/*.js dist/",
+    "build": "tsc && babel src --out-dir dist --extensions .ts",
     "clean": "rm -rf dist build",
     "lint": "eslint --ext ts src",
     "test": "rm -f test.log; mocha || bunyan --no-pager -o short test.log"
   },
   "dependencies": {
+    "@nels.onl/typed-event-emitter": "../typed-event-emitter",
     "broadcast-interfaces": "^1.0.0",
     "bunyan": "^1.8.14",
     "get-port": "^5.1.1",

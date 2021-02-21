@@ -1,28 +1,22 @@
-import PeerFinder, { Heartbeat } from './peer-finder';
-import OsmosisConnection, { Peer } from './osmosis-connection';
-import { generateConfig, PeerConfig, PeerInfo } from './peer-config';
-import {
+export { default as PeerFinder, Heartbeat } from './peer-finder';
+export { default as OsmosisConnection, Peer } from './osmosis-connection';
+export {
+  generateConfig as generatePeerConfig,
+  PeerConfig,
+  PeerInfo,
+  JsonPeerConfig,
+  JsonPeerInfo,
+  serializePeerConfig,
+  deserializePeerConfig,
+} from './peer-config';
+export {
   RpcServer,
   RpcSocket,
   RpcServerConfig,
   RpcMetadata,
   MethodHandlers,
 } from './rpc-sockets';
-import EncryptedSocket, { EncryptedSocketConfig } from './encrypted-socket';
-
 export {
-  OsmosisConnection,
-  PeerFinder,
-  Heartbeat,
-  RpcServer,
-  RpcServerConfig,
-  RpcSocket,
-  RpcMetadata,
-  MethodHandlers,
-  EncryptedSocket,
+  default as EncryptedSocket,
   EncryptedSocketConfig,
-  PeerConfig,
-  PeerInfo,
-  Peer,
-  generateConfig as generatePeerConfig,
-};
+} from './encrypted-socket';

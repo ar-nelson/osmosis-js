@@ -82,3 +82,15 @@ export class MetaStore implements Queryable {
     );
   }
 }
+
+export class ConstantMetadataSource implements MetadataSource {
+  constructor(readonly initialState: Json) {}
+
+  subscribe(listener: (json: Json) => void): void {
+    listener(this.initialState);
+  }
+
+  unsubscribe(): void {
+    // do nothing
+  }
+}

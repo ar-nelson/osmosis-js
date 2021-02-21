@@ -181,14 +181,13 @@ describe('Store', function () {
       new InMemorySaveState({ metadata: { peerId: UUID1 } })
     );
     expect(
-      await store.dispatch(
-        {
+      (
+        await store.dispatch({
           action: 'Set',
           path: '$.foo.bar',
           payload: 1,
-        },
-        true
-      )
+        })
+      ).failures
     ).to.have.length(1);
   });
 
@@ -274,10 +273,10 @@ describe('Store', function () {
       const lastOp1 = (await store1.ops).length;
       const lastOp2 = (await store2.ops).length;
       for (const a of actions1) {
-        await store1.dispatch(a, allowFailures);
+        await store1.dispatch(a);
       }
       for (const a of actions2) {
-        await store2.dispatch(a, allowFailures);
+        await store2.dispatch(a);
       }
       const ops1 = (await store1.ops).slice(lastOp1);
       const ops2 = (await store2.ops).slice(lastOp2);

@@ -54,8 +54,7 @@ Actions are sent with `dispatch`, and queries are created with `subscribe`.
 import Osmosis from '@nels.onl/osmosis-js';
 
 const store = new Osmosis({
-  appId: 'Example',
-  persistence: 'none'
+  appId: '82feacaf-3ae0-41c2-9aff-dd7dcb0a2a80'
 });
 
 // Create an array at the top-level key "numbers"
@@ -80,12 +79,13 @@ store.dispatch({ action: 'InsertUnique', path: '$.numbers', payload: 3 });
 The pairing process looks like this:
 
 1. One device (the _Requester_) dispatches a `RequestPair` action, with
-   a payload containing the UUID of another device (the _Responder_).
-2. The Requester generates a random 4-digit PIN and displays it to the user.
-3. The Responder receives the request and prompts the user for a PIN.
-4. The user enters the PIN.
+   a payload containing the UUID of another device (the _Responder_) and
+   a secret string (usually a randomly-generated PIN).
+2. The Requester displays the secret to the user.
+3. The Responder receives the request and prompts the user for the secret.
+4. The user enters the secret.
 5. The Responder dispatches an `AcceptPair` action, with a payload containing
-   the Requester's UUID and the PIN.
+   the Requester's UUID and the secret.
 6. The Requester receives the response. The devices are now paired, and will
    begin syncing in the background.
 
@@ -96,32 +96,27 @@ looks like this:
 import Osmosis from '@nels.onl/osmosis-js';
 
 const store = new Osmosis({
-  appId: 'Example',
-  peerName: 'Peer 1',
-  persistence: 'none'
+  appId: 'f8e8eec8-d219-4e6e-b8fc-3363504860ff',
+  peerName: 'Peer 1'
 });
 
 let peers = [];
 
-store.subscribeInternal('$.peers', (peerList) => {
+store.subscribeMeta('$.peers', (peerList) => {
   peers = peerList;
 });
 
-store.on('PairPin', (evt) => {
-  alert(`Pairing PIN: ${evt.pin}`);
-});
-
-store.on('PairRequest', (evt) => {
-  const pin = prompt(
-    `Received pair request from ${evt.peerName} (${evt.uuid}). ` +
+store.on('pairRequest', (evt) => {
+  const secret = prompt(
+    `Received pair request from ${evt.peerName} (${evt.peerId}). ` +
     'Please enter the PIN displayed on this device.'
   );
-  if (pin) {
+  if (secret) {
     store.dispatch({
       action: 'AcceptPair',
       payload: {
         uuid: evt.uuid,
-        pin
+        secret
       }
     });
   } else {
@@ -132,7 +127,7 @@ store.on('PairRequest', (evt) => {
   }
 });
 
-store.on('PairResponse', (evt) => {
+store.on('pairResponse', (evt) => {
   if (evt.accepted) {
     console.log(`Pair request to ${evt.peerName} accepted`);
   } else {
@@ -142,10 +137,19 @@ store.on('PairResponse', (evt) => {
 
 function pairWithFirstPeer() {
   if (!peers.length) return;
+
+  // Generate a 4-digit PIN
+  const secret = `${Math.floor(Math.random() * 10000)}`.padStart(4, '0');
+
   store.dispatch({
     action: 'RequestPair',
-    payload: peers[0].uuid;
+    payload: {
+      id: peers[0].uuid;
+      secret
+    }
   });
+
+  alert(`Pairing PIN: ${secret}`);
 }
 ```
 
@@ -162,9 +166,8 @@ An Osmosis store also emits [Events](#events), which can be listened to with the
 
 Pairing Osmosis instances requires a few event listeners:
 
-- `PairPin` - fires after sending a pair request, and contains the PIN for that request.
-- `PairRequest` - fires when a pair request is received.
-- `PairResponse` - fires when a pair request is accepted or rejected.
+- `pairRequest` - fires when a pair request is received.
+- `pairResponse` - fires when a pair request is accepted or rejected.
 
 Finally, the pairing process uses some actions that operate on network state
 instead of data. `RequestPair`, `AcceptPair`, and `RejectPair`, among others,
@@ -274,16 +277,16 @@ only stored or synced in this fully-compiled form.
 [{
   action: "InitObject",
   path: "$.foo",
-  id: { peer: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 1 }
+  id: { author: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 1 }
 }, {
   action: "InitObject",
   path: "$.foo.bar",
-  id: { peer: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 2 }
+  id: { author: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 2 }
 }, {
   action: "Set",
   path: "$.foo.bar.baz",
   payload: 1,
-  id: { peer: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 3 }
+  id: { author: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 3 }
 }]
 
 // Then, this new action:
@@ -297,7 +300,7 @@ only stored or synced in this fully-compiled form.
 // Which can be further compiled to this Causal Tree form:
 [{
   type: "Id",
-  query: { peer: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 2 }
+  query: { author: "ef6d1530-5ed7-4330-abb9-4d4accd1ead5", index: 2 }
 }, {
   type: "Key",
   query: "qux"
@@ -308,9 +311,9 @@ only stored or synced in this fully-compiled form.
 
 When two Osmosis instances establish a connection, they send each other a State
 Summary. The State Summary consists of a State Hash and a mapping from each
-known peer's Peer ID to its public key and latest Lamport number.
+known peer's Peer ID to its latest Lamport number.
 
-The State Hash is a cumulative hash of the IDs of an instance's entire action
+The State Hash is a cumulative hash of the IDs of an instance's entire Action
 history, in order. It is computed recursively:
 
 ```txt
@@ -331,37 +334,48 @@ synchronized.
 Action synchronization uses a [Causal Tree][causal-tree] algorithm. Actions are
 sorted by ID, first by Lamport timestamp and then by peer UUID. Synchronization
 involves rolling back to the latest Save Point that is earlier than all new
-actions, then applying all actions after that point, while inserting new actions
+Actions, then applying all Actions after that point, while inserting new Actions
 in sorted order.
 
 If a merged action fails, the failure is added to the `failures` metadata key
 and the action is skipped, but the remaining actions are applied as usual.
 
-Osmosis supports three kinds of sync operations: 
+Osmosis supports two kinds of sync operations:
 
-1. **Append Sync:** Upon establishing a connection, Peer A looks at every
-   Lamport number in Peer B's State Summary, and sends Peer B a list of every
-   action whose Lamport number is greater than Peer B's latest Lamport number
-   for that action's Peer ID.
-
-2. **Rewind Sync:** This is attempted if, after an Append Sync, two peers still
-   have different State Hashes. Both peers rewind through their Save Points and
-   send each other their State Hashes until they find a point in their histories
-   that they agree on, then send each other all actions after that point.
-
-   Specifically, both peers rewind to their latest Save Point, then send each
-   other their new State Hash and latest action ID. If one peer is behind the
-   other, it applies actions after that Save Point until it reaches an action ID
-   ≥ the other peer's latest ID. This process is repeated until both peers have
-   the same State Hash.
-
-   If one peer rewinds all the way to its earliest Save Point without ever
-   matching the other's State Hash, the state is considered irreconcilable, and
-   the peers are automatically unpaired.
-
-3. **Realtime Sync:** While an Osmosis instance is connected to one or more
-   peers, newly dispatched actions are sent to all connected peers as soon as
+1. **Live Sync:** While an Osmosis instance is connected to one or more
+   peers, newly dispatched Actions are sent to all connected peers as soon as
    they are dispatched.
+
+   Peers return their new State Hashes after a Live Sync update is applied. If,
+   after a Live Sync, a peer's State Hash differs from the local State Hash,
+   then a Full Sync is performed.
+
+2. **Full Sync:** When a connection between two peers is opened, or whenever
+   a Live Sync results in an inconsistent state, peers will negotiate a sync
+   session to ensure that their State Hashes match.
+
+   An Osmosis instance may only perform one Full Sync at a time. While a Full
+   Sync is in progress, all other sync requests and dispatched actions will be
+   enqueued until the sync has completed.
+
+   A Full Sync consists of two steps, performed by both peers:
+
+   1. Peer A looks at every Lamport number in Peer B's State Summary, and sends
+      Peer B a list of every Action whose Lamport number is greater than Peer
+      B's latest Lamport number for that Action's Peer ID.
+
+   2. If Peers A and B still do not have the same State Hash, Peer A sends
+      a list of its Save Points to Peer B, and Peer B returns the latest Action
+      ID in its history that matches a Save Point's ID and State Hash.
+
+      If a shared ID is found, Peer A sends Peer B all of its Actions with an ID
+      later than the shared ID. Peer B rewinds its state to the timestamp of the
+      shared ID, then applies all Actions from both A and B that are later than
+      the shared ID.
+
+      If no shared ID is found, the peers have no history in common. This can
+      happen if one peer has garbage-collected too much of its history. This is
+      an unrecoverable error, and the peers will unpair automatically.
 
 ## API
 
@@ -369,25 +383,20 @@ Osmosis supports three kinds of sync operations:
 
 #### `new Osmosis(config)`
 
-Creates a new Osmosis store from the given configuration object. If
-a persistence mode and filename are provided, the Osmosis state will be read
-from a database file.
+Creates a new Osmosis store from the given configuration object.
 
 `config` is an object with the following properties, all of which (except
 `appId`) are optional:
 
-- `appId`: A string that uniquely identifies this Osmosis app. Osmosis will only
-  detect peers with the same appId. Should be something long and random, like
-  a UUID.
+- `appId`: A UUID that uniquely identifies this Osmosis app. Osmosis will only
+  detect peers with the same `appId`.
 - `peerName`: A human-readable string to identify this device when pairing. Will
   appear in the UI of other devices when listing peers. Defaults to something
-  randomly generated.
-- `persistence`: A string describing how Osmosis data is persisted to disk.
-  Supported values are `'none'` (default), `'json'`, `'sqlite'`, and
-  `'leveldb'`. More values may be added in the future.
-- `filename`: The file to save Osmosis data to. Will be read immediately, then
-  written continually whenever the Osmosis state is changed. Required if
-  `persistence` is not `'none'`.
+  based on the device's hostname.
+- `saveState`: An instance of the `SaveState` class, which controls how the
+  store's data is persisted to disk. `InMemorySaveState` (the default) and
+  `JsonFileSaveState` are aways available. Additional modules are planned for
+  `SqliteSaveState` and `LevelDbSaveState`.
 - `minHistory`: An integer, defaults to `0`. The minimum number of past actions
   that Osmosis will preserve, even if it knows it doesn't need them (i.e., all
   known peers are synced). If you intend to do anything with Osmosis's history
@@ -541,13 +550,13 @@ will cancel the event listener, and `callback` will not be called again.
 
 ##### `RequestPair`
 
-    { action: "RequestPair", payload: UUID string }
+    { action: "RequestPair", payload: { id: UUID string, secret: string } }
 
 *To be written.*
 
 ##### `AcceptPair`
 
-    { action: "AcceptPair", payload: { id: UUID string, pin: PIN string } }
+    { action: "AcceptPair", payload: { id: UUID string, secret: string } }
 
 *To be written.*
 
@@ -577,15 +586,11 @@ will cancel the event listener, and `callback` will not be called again.
 
 ### Events
 
-#### `PairRequest`
+#### `pairRequest`
 
 *To be written.*
 
-#### `PairResponse`
-
-*To be written.*
-
-#### `PairPin`
+#### `pairResponse`
 
 *To be written.*
 
@@ -610,11 +615,12 @@ config parameters when constructing a `new Osmosis` object.
 #### `config`
 
 The configuration options for this Osmosis instance, which are a combination of
-the options set in the `new Osmosis` constructor and these additional options
-that are saved to the persistence file:
+some options set in the `new Osmosis` constructor and these additional options
+that are saved to the `SaveState`'s file:
 
 - `peerId`
-- `groupId`
+- `publicKey`
+- `privateKey`
 
 #### `failures`
 
