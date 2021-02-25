@@ -28,6 +28,7 @@ import {
   PathArray,
 } from './types';
 import { isEqual, isObject, last, reduceAsync } from './utils';
+import Monocypher from 'monocypher-wasm';
 
 export interface IdMappedJson {
   readonly root: JsonObject;
@@ -204,6 +205,7 @@ async function applyOp<M>(
   changes: Change[];
   failures: Failure[];
 }> {
+  await Monocypher.ready;
   assert(idIndex(op.id, state.ops, true) < 0, 'op applied twice');
   // FIXME: Transactions get split up into multiple IDs, this is unfinished
   let changes: Change[] = [];

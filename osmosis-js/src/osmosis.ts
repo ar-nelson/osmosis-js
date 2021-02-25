@@ -188,7 +188,7 @@ export default class Osmosis
           this.sessionResponses.clear();
           this.sessionId = null;
         });
-        conn.on('stop', () => {
+        conn.on('beforeStop', () => {
           this.sessionResponses.fail(new Error('Osmosis connection closed'));
           this.sessionResponses.clear();
           this.sessionId = null;

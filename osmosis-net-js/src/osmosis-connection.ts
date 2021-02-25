@@ -85,6 +85,7 @@ export interface ConnectionEvents {
   pairResponse: ({ peer: Peer, accepted: boolean }) => void;
   configUpdated: (config: PeerConfig) => void;
   start: () => void;
+  beforeStop: () => void;
   stop: () => void;
 }
 
@@ -169,6 +170,7 @@ class OsmosisConnection<
       this.log.warn('Tried to stop connection when already stopped');
       return;
     }
+    this.emit('beforeStop');
     this._started = false;
     this.log.info('Stopping connection');
     const gateway = this.gatewayServer;

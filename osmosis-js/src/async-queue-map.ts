@@ -42,7 +42,7 @@ export default class AsyncQueueMap<K, V> {
   insert(key: K, value: V): void {
     const demand = this.demand.get(key) ?? [];
     if (demand.length) {
-      setImmediate(() => demand.shift()?.({ value }));
+      demand.shift()?.({ value });
     } else if (this.supply.has(key)) {
       this.supply.get(key)?.push(value);
     } else {
@@ -54,7 +54,7 @@ export default class AsyncQueueMap<K, V> {
     this.error = error;
     for (const listeners of [...this.demand.values()]) {
       for (const listener of listeners) {
-        setImmediate(() => listener({ error }));
+        listener({ error });
       }
     }
     this.demand.clear();
