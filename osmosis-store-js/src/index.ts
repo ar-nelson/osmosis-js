@@ -11,26 +11,24 @@ export {
   Transaction,
   VoidAction,
 } from './actions';
+export { default as FlatFilesSaveState } from './flat-files-save-state';
 export {
   CausalTree,
   Id,
   idCompare,
   idIndex,
+  idToBinary,
   idToString,
   nextStateHash,
   Uuid,
   ZERO_ID,
   ZERO_STATE_HASH,
 } from './id';
-export { default as InMemorySaveState } from './in-memory-save-state';
 export {
-  JsonAdapter,
-  JsonAdapterResult,
-  JsonJsonAdapter,
-  NO_RESULT,
-  PlusScalarAdapter,
-} from './json-adapter';
-export { default as JsonFileSaveState } from './json-file-save-state';
+  default as InMemorySaveState,
+  SerializedSavePoint,
+  SerializedSaveState,
+} from './in-memory-save-state';
 export {
   CompiledJsonIdPath,
   CompiledJsonPath,
@@ -51,11 +49,7 @@ export {
   splitIntoSingularPaths,
   Vars,
 } from './jsonpath';
-export {
-  ConstantMetadataSource,
-  MetadataSource,
-  MetaStore,
-} from './meta-store';
+export { MetadataSource, MetaStore } from './meta-store';
 export { default as Queryable } from './queryable';
 export { Op, SavePoint, SaveState, StateSummary } from './save-state';
 export { default as Store } from './store';

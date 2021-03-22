@@ -1,6 +1,6 @@
-import assert from 'assert';
-import { Draft, produce } from 'immer';
-import { actionToChanges, Change, ScalarAction } from './actions';
+import Monocypher from 'monocypher-wasm';
+import { actionToChanges, applyChange, Change } from './actions';
+import { BinaryPath } from './binary-path';
 import {
   CausalTree,
   Id,
@@ -11,112 +11,13 @@ import {
   ZERO_ID,
   ZERO_STATE_HASH,
 } from './id';
-import { followPath, JsonDraftAdapter } from './json-adapter';
-import {
-  JsonCacheDatum,
-  JsonCacheStructureMarker,
-  NonEmptyJsonCacheDatum,
-} from './json-cache';
+import { JsonNode } from './json-source';
+import OverlayJsonSource, { SerializedJsonSource } from './overlay-json-source';
 import { Op, SavePoint, SaveState, StateSummary } from './save-state';
-import {
-  AbsolutePathArray,
-  Failure,
-  Json,
-  JsonArray,
-  JsonObject,
-  JsonScalar,
-  PathArray,
-} from './types';
-import { isEqual, isObject, last, reduceAsync } from './utils';
-import Monocypher from 'monocypher-wasm';
-
-export interface IdMappedJson {
-  readonly root: JsonObject;
-  readonly idToPath: { readonly [key: string]: AbsolutePathArray };
-  readonly pathToId: PathToIdTree;
-}
-
-export interface PathToIdTree {
-  readonly ids: readonly Id[];
-  readonly subtree?: PathToIdSubtree;
-}
-
-export type PathToIdSubtree =
-  | readonly PathToIdTree[]
-  | { readonly [key: string]: PathToIdTree };
-
-export interface State<Metadata> extends IdMappedJson, StateSummary {
-  readonly ops: readonly Op[];
-  readonly failures: readonly (Failure & { readonly id: Id })[];
-  readonly savePoints: readonly (SavePoint & IdMappedJson)[];
-  readonly metadata: Metadata;
-}
+import { Failure } from './types';
+import { isEqual, last, reduceAsync } from './utils';
 
 const MIN_SAVE_POINT_SIZE = 4;
-
-function getIdsOfPath(path: PathArray, tree: PathToIdTree): readonly Id[] {
-  for (const key of path) {
-    const subtree = tree.subtree;
-    if (!subtree || !Object.prototype.hasOwnProperty.call(subtree, key)) {
-      return [];
-    }
-    tree = subtree[key];
-  }
-  return tree.ids;
-}
-
-function pathToIdSubtree(
-  path: PathArray,
-  tree: Draft<PathToIdTree>
-): Draft<PathToIdTree> {
-  for (const key of path) {
-    let subtree = tree.subtree;
-    if (!subtree) {
-      subtree = typeof key === 'number' ? [] : {};
-      tree.subtree = subtree;
-    }
-    if (!Object.prototype.hasOwnProperty.call(subtree, key)) {
-      subtree[key] = { ids: [] };
-    }
-    tree = subtree[key];
-  }
-  return tree;
-}
-
-function moveTree(
-  { idToPath, pathToId }: Draft<IdMappedJson>,
-  from: AbsolutePathArray,
-  to: AbsolutePathArray
-) {
-  const fromTree = pathToIdSubtree(from, pathToId);
-  const toTree = pathToIdSubtree(to, pathToId);
-  toTree.ids = fromTree.ids;
-  toTree.subtree = fromTree.subtree;
-  fromTree.ids = [];
-  delete fromTree.subtree;
-
-  function moveSubtree(tree: Draft<PathToIdTree>, subpath: PathArray) {
-    const path = [...to, ...subpath] as Draft<AbsolutePathArray>;
-    tree.ids.forEach((id) => (idToPath[idToString(id)] = path));
-    if (Array.isArray(tree.subtree)) {
-      tree.subtree.forEach((t, i) => moveSubtree(t, [...subpath, i]));
-    } else if (isObject(tree.subtree)) {
-      Object.entries(tree.subtree).forEach(([k, v]) =>
-        moveSubtree(v, [...subpath, k])
-      );
-    }
-  }
-
-  moveSubtree(toTree, []);
-}
-
-function addIfAbsent<T>(a: T[], b: readonly T[]): void {
-  for (const x of b) {
-    if (a.every((y) => !isEqual(x, y))) {
-      a.push(x);
-    }
-  }
-}
 
 function idIndexAfter(id: Id, ops: readonly CausalTree[]): number {
   const i = idIndex(id, ops);
@@ -126,279 +27,118 @@ function idIndexAfter(id: Id, ops: readonly CausalTree[]): number {
   return i;
 }
 
-async function applyChange(
-  change: Change,
-  id: Id,
-  state: Draft<State<unknown>>
-) {
-  // TODO: Unlink IDs of removed subtrees
-  switch (change.type) {
-    case 'Put': {
-      const parent = change.path.slice(0, change.path.length - 1);
-      const index = change.path[change.path.length - 1];
-      const { found, value } = await followPath(
-        parent,
-        state.root,
-        JsonDraftAdapter
-      );
-      if (found && (Array.isArray(value) || isObject(value))) {
-        value[index] = change.value;
-      }
-      state.idToPath[idToString(id)] = change.path as Draft<AbsolutePathArray>;
-      pathToIdSubtree(change.path, state.pathToId).ids = [id];
-      break;
-    }
-    case 'Delete': {
-      const parent = change.path.slice(0, change.path.length - 1);
-      const index = change.path[change.path.length - 1];
-      const { found, value } = await followPath(
-        parent,
-        state.root,
-        JsonDraftAdapter
-      );
-      if (found) {
-        if (Array.isArray(value) && index === value.length - 1) {
-          value.pop();
-        } else {
-          delete (value as Draft<JsonArray | JsonObject>)[index];
-        }
-      }
-      const subtree = pathToIdSubtree(change.path, state.pathToId);
-      const ids = subtree.ids;
-      subtree.ids = [];
-      for (const id of ids) {
-        delete state.idToPath[idToString(id)];
-      }
-      break;
-    }
-    case 'Touch':
-      state.idToPath[idToString(id)] = change.path as Draft<AbsolutePathArray>;
-      addIfAbsent(pathToIdSubtree(change.path, state.pathToId).ids, [id]);
-      break;
-    case 'Move': {
-      const fromParent = change.from.slice(0, change.from.length - 1);
-      const toParent = change.to.slice(0, change.to.length - 1);
-      const fromIndex = change.from[change.from.length - 1];
-      const toIndex = change.to[change.to.length - 1];
-      const from = await followPath(fromParent, state.root, JsonDraftAdapter);
-      const to = await followPath(toParent, state.root, JsonDraftAdapter);
-      if (from.found && to.found) {
-        const moved = (from.value as JsonArray | JsonObject)[fromIndex];
-        if (Array.isArray(from.value) && fromIndex === from.value.length - 1) {
-          from.value.pop();
-        } else {
-          delete (from.value as Draft<JsonArray | JsonObject>)[fromIndex];
-        }
-        (to.value as Draft<JsonArray | JsonObject>)[toIndex] = moved;
-      }
-      moveTree(state, change.from, change.to);
-      break;
-    }
-  }
+export interface SerializedSavePoint
+  extends Readonly<SerializedJsonSource>,
+    StateSummary {
+  readonly width: number;
+  readonly id: Id;
+  readonly ops: readonly Op[];
+  readonly failures: readonly (Failure & CausalTree)[];
 }
 
-async function applyOp<M>(
-  op: Op,
-  state: State<M>
-): Promise<{
-  state: State<M>;
-  changes: Change[];
-  failures: Failure[];
-}> {
-  await Monocypher.ready;
-  assert(idIndex(op.id, state.ops, true) < 0, 'op applied twice');
-  // FIXME: Transactions get split up into multiple IDs, this is unfinished
-  let changes: Change[] = [];
-  const failures: Failure[] = [];
-  const scalarOps: (ScalarAction<unknown> & Op)[] =
-    op.action === 'Transaction'
-      ? op.payload.map((a, i) => ({
-          ...a,
-          id: { author: op.id.author, index: op.id.index + i },
-        }))
-      : [op];
-  let newState = await produce(state, async (state) => {
-    state.hash = nextStateHash(state.hash as Uint8Array, op.id);
-    state.ops.push(op as Draft<Op>);
-    state.latestIndexes[op.id.author] = Math.max(
-      state.latestIndexes[op.id.author] || 0,
-      op.id.index
-    );
-    for (const op of scalarOps) {
-      const result = await actionToChanges(
-        op,
-        state.root,
-        JsonDraftAdapter,
-        (id) => state.idToPath[idToString(id)]
-      );
-      for (const change of result.changes) {
-        await applyChange(change, op.id, state);
-        changes.push(change);
-      }
-      failures.push(...result.failures);
-    }
-    state.failures.push(
-      ...failures.map((f) => ({ id: op.id, ...(f as Draft<Failure>) }))
-    );
-    updateSavePoints(state);
-  });
-  if (op.action === 'Transaction' && failures.length) {
-    changes = [];
-    const { hash, latestIndexes, ops, failures } = newState;
-    newState = { ...state, hash, latestIndexes, ops, failures };
-  }
-  return { state: newState, changes, failures };
-}
-
-function updateSavePoints({
-  root,
-  idToPath,
-  pathToId,
-  savePoints,
-  ops,
-  hash,
-  latestIndexes,
-}: Draft<State<unknown>>): boolean {
-  if (
-    ops.length < MIN_SAVE_POINT_SIZE ||
-    idCompare(
-      ops[ops.length - MIN_SAVE_POINT_SIZE].id,
-      last(savePoints)?.id || ZERO_ID
-    ) <= 0
-  ) {
-    return false;
-  }
-  for (let i = 2; i < savePoints.length; i++) {
-    if (savePoints[i].width === savePoints[i - 2].width) {
-      savePoints[i - 2].width *= 2;
-      savePoints.splice(i - 1, 1);
-      break;
-    }
-  }
-  const id = (last(ops) as Op).id;
-  savePoints.push({
-    root,
-    idToPath,
-    pathToId,
-    id,
-    width: MIN_SAVE_POINT_SIZE,
-    hash,
-    latestIndexes,
-  });
-  return true;
+export interface SerializedSaveState<Metadata>
+  extends Readonly<SerializedJsonSource>,
+    StateSummary {
+  readonly savePoints: readonly SerializedSavePoint[];
+  readonly ops: readonly Op[];
+  readonly failures: readonly (Failure & CausalTree)[];
+  readonly metadata: Metadata;
 }
 
 export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
-  protected state: State<Promise<Metadata>>;
+  protected data: OverlayJsonSource;
+  protected _ops: Op[];
+  protected _failures: (Failure & CausalTree)[];
+  protected _savePoints: (SavePoint & { data: OverlayJsonSource })[];
+  protected _stateSummary: StateSummary;
+  protected _metadata: Promise<Metadata>;
   private onInitMetadata?: (metadata: Metadata) => void;
 
-  constructor(args: Partial<State<Metadata>>) {
+  constructor(args: Partial<SerializedSaveState<Metadata>> = {}) {
     super();
-    this.state = {
-      root: args.root ?? {},
-      idToPath: args.idToPath ?? {},
-      pathToId: args.pathToId ?? { ids: [] },
-      hash: args.hash ?? ZERO_STATE_HASH,
-      latestIndexes: args.latestIndexes ?? {},
-      ops: args.ops ?? [],
-      failures: args.failures ?? [],
-      savePoints: args.savePoints ?? [
-        {
-          root: {},
-          idToPath: {},
-          pathToId: { ids: [] },
-          id: ZERO_ID,
-          width: MIN_SAVE_POINT_SIZE,
-          hash: ZERO_STATE_HASH,
-          latestIndexes: {},
-        },
-      ],
-      metadata:
-        'metadata' in args
-          ? Promise.resolve(args.metadata as Metadata)
-          : new Promise((resolve: (metadata: Metadata) => void) => {
-              this.onInitMetadata = resolve;
-            }),
-    };
-  }
-
-  private jsonToDatum(json: Json): JsonScalar | JsonCacheStructureMarker;
-  private jsonToDatum(
-    json: Json | undefined
-  ): JsonScalar | JsonCacheStructureMarker | undefined;
-
-  private jsonToDatum(
-    json: Json | undefined
-  ): JsonScalar | JsonCacheStructureMarker | undefined {
-    if (Array.isArray(json)) {
-      return JsonCacheStructureMarker.Array;
-    } else if (isObject(json)) {
-      return JsonCacheStructureMarker.Object;
-    } else {
-      return json as JsonScalar | undefined;
-    }
-  }
-
-  private lookupValue(path: PathArray): Json | undefined {
-    let value: Json = this.state.root;
-    for (const key of path) {
-      if (Array.isArray(value) && typeof key === 'number') {
-        value = value[key];
-      } else if (isObject(value) && typeof key === 'string') {
-        value = value[key];
-      } else {
-        return undefined;
+    const { savePoints, ops, failures } = (args.savePoints ?? []).reduce(
+      ({ savePoints, ops, failures }, savePoint) => {
+        const data = new OverlayJsonSource(last(savePoints)?.data);
+        data.deserialize(savePoint);
+        const { hash, latestIndexes, width, id } = savePoint;
+        return {
+          savePoints: [...savePoints, { data, hash, latestIndexes, width, id }],
+          ops: [...ops, ...savePoint.ops],
+          failures: [...failures, ...savePoint.failures],
+        };
+      },
+      {
+        savePoints: [] as (SavePoint & { data: OverlayJsonSource })[],
+        ops: [] as Op[],
+        failures: [] as (Failure & CausalTree)[],
       }
+    );
+    this._savePoints = savePoints.length
+      ? savePoints
+      : [
+          {
+            data: new OverlayJsonSource(),
+            id: ZERO_ID,
+            width: MIN_SAVE_POINT_SIZE,
+            hash: ZERO_STATE_HASH,
+            latestIndexes: {},
+          },
+        ];
+    this._ops = [...ops, ...(args.ops ?? [])];
+    this._failures = [...failures, ...(args.failures ?? [])];
+    if ('metadata' in args) {
+      this._metadata = Promise.resolve(args.metadata as Metadata);
+    } else {
+      this._metadata = new Promise((resolve) => {
+        this.onInitMetadata = resolve;
+      });
     }
-    return value;
-  }
-
-  async lookupByPath(path: PathArray): Promise<JsonCacheDatum> {
-    return {
-      value: this.jsonToDatum(this.lookupValue(path)),
-      ids: getIdsOfPath(path, this.state.pathToId),
-    };
-  }
-
-  async lookupById(
-    id: Id
-  ): Promise<(JsonCacheDatum & { readonly path: AbsolutePathArray }) | null> {
-    const path = this.state.idToPath[idToString(id)] as readonly [
-      string,
-      ...PathArray
-    ];
-    if (path) {
-      return {
-        ...(await this.lookupByPath(path)),
-        path,
+    this.data = new OverlayJsonSource(last(savePoints)?.data);
+    if (args.pathToValue && args.pathToIds && args.idToPath) {
+      this.data.deserialize(args as SerializedJsonSource);
+    }
+    if (args.hash && args.latestIndexes) {
+      this._stateSummary = {
+        hash: args.hash,
+        latestIndexes: args.latestIndexes,
       };
+    } else {
+      this._stateSummary = { hash: ZERO_STATE_HASH, latestIndexes: {} };
     }
-    return null;
   }
 
-  async listObject(
-    path: PathArray
-  ): Promise<readonly (NonEmptyJsonCacheDatum & { key: string })[]> {
-    const obj = this.lookupValue(path);
-    if (isObject(obj)) {
-      return [...Object.entries(obj)].map(([key, value]) => ({
-        key,
-        value: this.jsonToDatum(value),
-        ids: getIdsOfPath([...path, key], this.state.pathToId),
-      }));
-    }
-    return [];
+  getByPath(path: BinaryPath): Promise<JsonNode | undefined> {
+    return this.data.getByPath(path);
+  }
+  getById(id: Id): Promise<JsonNode | undefined> {
+    return this.data.getById(id);
+  }
+  getPathById(id: Id): Promise<BinaryPath | undefined> {
+    return this.data.getPathById(id);
+  }
+  getIdsByPath(path: BinaryPath): Promise<Id[]> {
+    return this.data.getIdsByPath(path);
+  }
+  getIdsAfter(
+    id: Id
+  ): Promise<Iterable<{ readonly id: Id; readonly path: BinaryPath }>> {
+    return this.data.getIdsAfter(id);
   }
 
-  async listArray(path: PathArray): Promise<readonly NonEmptyJsonCacheDatum[]> {
-    const arr = this.lookupValue(path);
-    if (Array.isArray(arr)) {
-      return arr.map((value, key) => ({
-        value: this.jsonToDatum(value),
-        ids: getIdsOfPath([...path, key], this.state.pathToId),
-      }));
-    }
-    return [];
+  protected savePointAdded(
+    savePoint: SavePoint & { data: OverlayJsonSource }
+  ): void {
+    // override point
+  }
+
+  protected savePointUpdated(
+    savePoint: SavePoint & { data: OverlayJsonSource }
+  ): void {
+    // override point
+  }
+
+  protected savePointDeleted(id: Id): void {
+    // override point
   }
 
   async insert(
@@ -408,7 +148,7 @@ export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
     failures: readonly Failure[];
   }> {
     ops = ops
-      .filter(({ id }) => idIndex(id, this.state.ops, true) < 0)
+      .filter(({ id }) => idIndex(id, this._ops, true) < 0)
       .sort((x, y) => idCompare(x.id, y.id));
     if (!ops.length) {
       return { changes: [], failures: [] };
@@ -416,77 +156,208 @@ export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
 
     const changes: Change[] = [];
     const failures: Failure[] = [];
-    let insertAfterState = this.state;
-    if (idCompare(last(this.state.ops)?.id || ZERO_ID, ops[0].id) >= 0) {
+    if (idCompare(last(this._ops)?.id || ZERO_ID, ops[0].id) >= 0) {
       const opsAfterInsert = await this.rewind(ops[0].id);
-      insertAfterState = await reduceAsync(
-        opsAfterInsert,
-        this.state,
-        async (state, op) => {
-          while (ops.length && idCompare(ops[0].id, op.id) < 0) {
-            const nextResult = await applyOp(ops.shift() as Op, state);
-            changes.push(...nextResult.changes);
-            failures.push(...nextResult.failures);
-            state = nextResult.state;
-          }
-          const nextResult = await applyOp(op, state);
+      for (const op of opsAfterInsert) {
+        while (ops.length && idCompare(ops[0].id, op.id) < 0) {
+          const nextResult = await this.applyOp(ops.shift() as Op);
           changes.push(...nextResult.changes);
-          return nextResult.state;
+          failures.push(...nextResult.failures);
         }
-      );
+        const nextResult = await this.applyOp(op);
+        changes.push(...nextResult.changes);
+      }
     }
-    this.state = await reduceAsync(ops, insertAfterState, async (state, op) => {
-      const nextResult = await applyOp(op, state);
+    for (const op of ops) {
+      const nextResult = await this.applyOp(op);
       changes.push(...nextResult.changes);
       failures.push(...nextResult.failures);
-      return nextResult.state;
-    });
+    }
     return { changes, failures };
+  }
+
+  protected async applyOp(
+    op: Op
+  ): Promise<{
+    changes: readonly Change[];
+    failures: readonly (Failure & CausalTree)[];
+  }> {
+    await Monocypher.ready;
+    const { changes, failures, index } = await actionToChanges(
+      op,
+      op.id,
+      this.data
+    );
+    this._ops.push(op);
+    this._failures.push(...failures);
+    this._stateSummary = {
+      hash: nextStateHash(this._stateSummary.hash, op.id),
+      latestIndexes: {
+        ...this._stateSummary.latestIndexes,
+        [op.id.author]: index,
+      },
+    };
+    for (const change of changes) {
+      await applyChange(change, change.id, this.data);
+    }
+    this.updateSavePoints();
+    return { changes, failures };
+  }
+
+  protected updateSavePoints():
+    | (SavePoint & { data: OverlayJsonSource })
+    | undefined {
+    if (
+      this._ops.length < MIN_SAVE_POINT_SIZE ||
+      idCompare(
+        this._ops[this._ops.length - MIN_SAVE_POINT_SIZE].id,
+        last(this._savePoints)?.id || ZERO_ID
+      ) <= 0
+    ) {
+      return;
+    }
+    const newSavePoint = {
+      data: this.data,
+      id: (last(this._ops) as Op).id,
+      width: MIN_SAVE_POINT_SIZE,
+      ...this._stateSummary,
+    };
+    this._savePoints.push(newSavePoint);
+    this.savePointAdded(newSavePoint);
+    this.data = new OverlayJsonSource(this.data);
+    let repeat = true;
+    while (repeat) {
+      repeat = false;
+      for (let i = this._savePoints.length - 4; i >= 0; i--) {
+        if (this._savePoints[i].width === this._savePoints[i + 2].width) {
+          this.removeSavePointAfter(i);
+          repeat = true;
+          break;
+        }
+      }
+    }
+    return newSavePoint;
+  }
+
+  protected removeSavePointAfter(
+    index: number
+  ): SavePoint & { data: OverlayJsonSource } {
+    const [before, removed, merged] = this._savePoints.slice(index, index + 3);
+    removed.data.mergeChild(merged.data);
+    const newBefore = {
+      ...before,
+      width: before.width * 2,
+    };
+    const newMerged = {
+      ...merged,
+      data: removed.data,
+    };
+    if (index + 3 < this._savePoints.length) {
+      this._savePoints[index + 3].data.parent = newMerged.data;
+    } else {
+      this.data.parent = newMerged.data;
+    }
+    this._savePoints.splice(index, 3, newBefore, newMerged);
+    this.savePointDeleted(removed.id);
+    this.savePointUpdated(newBefore);
+    this.savePointUpdated(newMerged);
+    return newMerged;
   }
 
   async opsRange(
     earliestId: Id | null,
     latestId: Id | null
   ): Promise<readonly Op[]> {
-    return this.state.ops.slice(
-      earliestId ? idIndex(earliestId, this.state.ops) : 0,
-      latestId ? idIndexAfter(latestId, this.state.ops) : undefined
+    return this._ops.slice(
+      earliestId ? idIndex(earliestId, this._ops) : 0,
+      latestId ? idIndexAfter(latestId, this._ops) : undefined
     );
   }
 
   async failuresRange(
     earliestId: Id | null,
     latestId: Id | null
-  ): Promise<readonly Failure[]> {
-    return this.state.failures.slice(
-      earliestId ? idIndex(earliestId, this.state.failures) : 0,
-      latestId ? idIndexAfter(latestId, this.state.failures) : undefined
+  ): Promise<readonly (Failure & CausalTree)[]> {
+    return this._failures.slice(
+      earliestId ? idIndex(earliestId, this._failures) : 0,
+      latestId ? idIndexAfter(latestId, this._failures) : undefined
     );
   }
 
+  async garbageCollect(earliestId: Id): Promise<void> {
+    await Monocypher.ready;
+    const savePointIndex = idIndex(earliestId, this._savePoints);
+    const fromSavePoint = this._savePoints[savePointIndex];
+    const matchesSavePoint = idCompare(earliestId, fromSavePoint.id) === 0;
+    const earliestSavePoint = matchesSavePoint
+      ? fromSavePoint
+      : this._savePoints[savePointIndex + 1];
+    let newSavePoints = this._savePoints.slice(savePointIndex);
+    const newData = this.savePoints[0].data;
+    this._savePoints
+      .slice(0, savePointIndex)
+      .forEach((sp) => newData.mergeChild(sp.data));
+    if (!matchesSavePoint) {
+      const newBase: SavePoint & {
+        data: OverlayJsonSource;
+      } = await reduceAsync(
+        await this.opsRange(fromSavePoint.id, earliestId),
+        fromSavePoint,
+        async (savePoint, op) => {
+          const { changes, index } = await actionToChanges(
+            op,
+            op.id,
+            savePoint.data
+          );
+          for (const change of changes) {
+            await applyChange(change, change.id, savePoint.data);
+          }
+          return {
+            ...fromSavePoint,
+            id: op.id,
+            width: fromSavePoint.width - 1,
+            hash: nextStateHash(fromSavePoint.hash, op.id),
+            latestIndexes: {
+              ...fromSavePoint.latestIndexes,
+              [op.id.author]: index,
+            },
+          };
+        }
+      );
+      newSavePoints = [newBase, ...newSavePoints];
+    }
+    (this._ops = earliestSavePoint
+      ? this._ops.slice(idIndexAfter(earliestSavePoint.id, this._ops))
+      : []),
+      (this._failures = earliestSavePoint
+        ? this._failures.slice(
+            idIndexAfter(earliestSavePoint.id, this._failures)
+          )
+        : []),
+      (this._savePoints = newSavePoints);
+  }
+
   async rewind(latestId: Id): Promise<readonly Op[]> {
-    for (let i = this.state.savePoints.length - 1; i >= 0; i--) {
-      const savePoint = this.state.savePoints[i];
+    for (let i = this._savePoints.length - 1; i >= 0; i--) {
+      const savePoint = this._savePoints[i];
       if (idCompare(savePoint.id, latestId) <= 0) {
-        const failureRewindIndex = idIndex(latestId, this.state.failures);
-        let rewindIndex = idIndex(latestId, this.state.ops);
-        if (isEqual(this.state.ops[rewindIndex].id, latestId)) {
+        const failureRewindIndex = idIndex(latestId, this._failures);
+        let rewindIndex = idIndex(latestId, this._ops);
+        if (isEqual(this._ops[rewindIndex].id, latestId)) {
           rewindIndex++;
         }
-        const savePointIndex = idIndex(savePoint.id, this.state.ops, true) + 1;
-        const droppedOps = this.state.ops.slice(rewindIndex);
-        const appliedOps = this.state.ops.slice(savePointIndex, rewindIndex);
-        this.state = await reduceAsync(
-          appliedOps,
-          {
-            ...this.state,
-            ...savePoint,
-            ops: this.state.ops.slice(0, savePointIndex),
-            failures: this.state.failures.slice(0, failureRewindIndex),
-            savePoints: this.state.savePoints.slice(0, i + 1),
-          } as State<Promise<Metadata>>,
-          async (state, op) => (await applyOp(op, state)).state
-        );
+        const savePointIndex = idIndex(savePoint.id, this._ops, true) + 1;
+        const droppedOps = this._ops.slice(rewindIndex);
+        const appliedOps = this._ops.slice(savePointIndex, rewindIndex);
+        this._ops = this._ops.slice(0, savePointIndex);
+        this._failures = this._failures.slice(0, failureRewindIndex);
+        this._savePoints = this._savePoints.slice(0, i + 1);
+        this.data = new OverlayJsonSource(savePoint.data);
+        const { hash, latestIndexes } = savePoint;
+        this._stateSummary = { hash, latestIndexes };
+        for (const op of appliedOps) {
+          await this.applyOp(op);
+        }
         return droppedOps;
       }
     }
@@ -499,7 +370,7 @@ export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
 
   get savePoints(): Promise<readonly SavePoint[]> {
     return Promise.resolve(
-      this.state.savePoints.map(({ id, hash, width, latestIndexes }) => ({
+      this._savePoints.map(({ id, hash, width, latestIndexes }) => ({
         id,
         hash,
         width,
@@ -509,11 +380,16 @@ export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
   }
 
   get metadata(): Promise<Metadata> {
-    return Promise.resolve(this.state.metadata);
+    return Promise.resolve(this._metadata);
   }
 
   async setMetadata(metadata: Metadata): Promise<void> {
-    this.state = { ...this.state, metadata: Promise.resolve({ ...metadata }) };
+    if (this.onInitMetadata) {
+      this.onInitMetadata(metadata);
+      delete this.onInitMetadata;
+    } else {
+      this._metadata = Promise.resolve(metadata);
+    }
   }
 
   async initMetadata(initializer: () => Promise<Metadata>): Promise<void> {
@@ -524,9 +400,6 @@ export default class InMemorySaveState<Metadata> extends SaveState<Metadata> {
   }
 
   get stateSummary(): Promise<StateSummary> {
-    return Promise.resolve({
-      hash: this.state.hash,
-      latestIndexes: this.state.latestIndexes,
-    });
+    return Promise.resolve(this._stateSummary);
   }
 }

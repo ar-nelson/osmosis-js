@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
-import { JsonJsonAdapter } from '../src/json-adapter';
+import { binaryPathToArray, pathArrayToBinary } from '../src/binary-path';
+import { ConstantJsonSource } from '../src/json-source';
 import { compileJsonPath, queryPaths, queryValues } from '../src/jsonpath';
 
 describe('JsonPath', function () {
@@ -270,7 +271,7 @@ describe('JsonPath', function () {
     ]);
   });
 
-  const fooBarJson = {
+  const fooBarJson = new ConstantJsonSource({
     foo: {
       bar: 1,
       baz: 2,
@@ -280,17 +281,13 @@ describe('JsonPath', function () {
       bar: 4,
       baz: 5,
     },
-  };
+  });
 
   it('should query an existing literal path', async function () {
     expect(
-      await queryPaths(
-        compileJsonPath('$.foo.bar'),
-        fooBarJson,
-        JsonJsonAdapter
-      )
+      await queryPaths(compileJsonPath('$.foo.bar'), fooBarJson)
     ).to.deep.equal({
-      existing: [['foo', 'bar']],
+      existing: [pathArrayToBinary(['foo', 'bar'])],
       potential: [],
       failures: [],
     });
@@ -298,25 +295,17 @@ describe('JsonPath', function () {
 
   it('should query a potential literal path', async function () {
     expect(
-      await queryPaths(
-        compileJsonPath('$.foo.qux'),
-        fooBarJson,
-        JsonJsonAdapter
-      )
+      await queryPaths(compileJsonPath('$.foo.qux'), fooBarJson)
     ).to.deep.equal({
       existing: [],
-      potential: [['foo', 'qux']],
+      potential: [pathArrayToBinary(['foo', 'qux'])],
       failures: [],
     });
   });
 
   it('should report a failure on a query for a missing literal path', async function () {
     expect(
-      await queryPaths(
-        compileJsonPath('$.baz.qux'),
-        fooBarJson,
-        JsonJsonAdapter
-      )
+      await queryPaths(compileJsonPath('$.baz.qux'), fooBarJson)
     ).to.deep.equal({
       existing: [],
       potential: [],
@@ -326,23 +315,18 @@ describe('JsonPath', function () {
 
   it('should extract a value with queryValues', async function () {
     expect(
-      await queryValues(
-        compileJsonPath('$.foo.bar'),
-        fooBarJson,
-        JsonJsonAdapter
-      )
+      await queryValues(compileJsonPath('$.foo.bar'), fooBarJson)
     ).to.deep.equal([1]);
   });
 
   it('should query multiple existing paths with ..', async function () {
     const { existing, potential, failures } = await queryPaths(
       compileJsonPath('$..bar'),
-      fooBarJson,
-      JsonJsonAdapter
+      fooBarJson
     );
     expect(potential).to.be.empty;
     expect(failures).to.be.empty;
-    expect(existing)
+    expect(existing.map(binaryPathToArray))
       .to.have.length(3)
       .and.to.deep.contain(['bar'])
       .and.to.deep.contain(['bar', 'bar'])
@@ -350,9 +334,7 @@ describe('JsonPath', function () {
   });
 
   it('should extract multiple values with queryValues and ..', async function () {
-    expect(
-      await queryValues(compileJsonPath('$..bar'), fooBarJson, JsonJsonAdapter)
-    )
+    expect(await queryValues(compileJsonPath('$..bar'), fooBarJson))
       .to.have.length(3)
       .and.to.contain(1)
       .and.to.contain(4)

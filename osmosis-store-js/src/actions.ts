@@ -1,38 +1,47 @@
-import { Id } from './id';
+import assert from 'assert';
+import isEqual from 'lodash.isequal';
 import {
-  followPath,
-  isJsonEqual,
-  JsonAdapter,
-  JsonJsonAdapter,
-  toJsonWithAdapter,
-} from './json-adapter';
+  BinaryPath,
+  binaryPathAppend,
+  binaryPathSplit,
+  binaryPathToArray,
+} from './binary-path';
+import { CausalTree, Id } from './id';
+import {
+  JsonSource,
+  jsonToSource,
+  moveJson,
+  MutableJsonSource,
+  sourceToJson,
+} from './json-source';
 import {
   CompiledJsonIdPath,
   CompiledJsonPath,
   jsonPathToString,
   queryPaths,
 } from './jsonpath';
-import { AbsolutePathArray, Failure, Json, PathArray } from './types';
-import { flatMap, flatMapAsync, last } from './utils';
+import OverlayJsonSource from './overlay-json-source';
+import { Failure, Json } from './types';
+import { flatMap, flatMapAsync } from './utils';
 
 export type Change =
   | {
       type: 'Put';
-      path: AbsolutePathArray;
+      path: BinaryPath;
       value: Json;
     }
   | {
       type: 'Delete';
-      path: AbsolutePathArray;
+      path: BinaryPath;
     }
   | {
       type: 'Touch';
-      path: AbsolutePathArray;
+      path: BinaryPath;
     }
   | {
       type: 'Move';
-      to: AbsolutePathArray;
-      from: AbsolutePathArray;
+      to: BinaryPath;
+      from: BinaryPath;
     };
 
 export interface SetAction<Path> {
@@ -71,59 +80,70 @@ export interface Transaction<Path> {
 
 export type Action<Path> = ScalarAction<Path> | Transaction<Path>;
 
-function isValidPath(path: PathArray): path is AbsolutePathArray {
-  return !!path.length;
-}
-
-async function fillNulls<T>(
+async function fillNulls(
   changes: Change[],
-  path: AbsolutePathArray,
-  json: T,
-  adapter: JsonAdapter<T>
+  path: BinaryPath,
+  source: JsonSource
 ) {
-  const index = last(path);
+  const { parent, index } = binaryPathSplit(path);
   if (typeof index !== 'number') {
     return;
   }
-  const parent = path.slice(0, path.length - 1);
-  const { value } = await followPath(parent, json, adapter);
-  const length = await adapter.arrayLength(value as T);
-  if (length == null || length >= index) {
+  const node = await source.getByPath(parent);
+  if (!node || typeof node !== 'object' || node.type !== 'array') {
     return;
   }
-  for (let i = length; i < index; i++) {
+  for (let i = node.length; i < index; i++) {
     changes.push({
       type: 'Put',
-      path: ([...parent, i] as unknown) as AbsolutePathArray,
+      path: binaryPathAppend(parent, i),
       value: null,
     });
   }
 }
 
-export function actionToChanges<T>(
-  action: ScalarAction<CompiledJsonPath>,
-  json: T,
-  adapter: JsonAdapter<T>
+export async function actionToChanges(
+  action: Action<CompiledJsonPath | CompiledJsonIdPath>,
+  id: Id,
+  source: JsonSource
 ): Promise<{
-  failures: Failure[];
-  changes: Change[];
-}>;
+  failures: (Failure & CausalTree)[];
+  changes: (Change & CausalTree)[];
+  index: number;
+}> {
+  if (action.action === 'Transaction') {
+    const changes: (Change & CausalTree)[] = [];
+    const overlay = new OverlayJsonSource(source);
+    let index = id.index;
+    for (const scalar of action.payload) {
+      const result = await scalarActionToChanges(scalar, overlay);
+      if (result.failures.length) {
+        return {
+          changes: [],
+          failures: result.failures.map((f) => ({ id, ...f })),
+          index: id.index + action.payload.length - 1,
+        };
+      }
+      for (const change of result.changes) {
+        const thisId = { ...id, index };
+        changes.push({ ...change, id: thisId });
+        await applyChange(change, thisId, overlay);
+      }
+      index++;
+    }
+    return { changes, failures: [], index: index - 1 };
+  }
+  const { changes, failures } = await scalarActionToChanges(action, source);
+  return {
+    changes: changes.map((c) => ({ ...c, id })),
+    failures: failures.map((f) => ({ id, ...f })),
+    index: id.index,
+  };
+}
 
-export function actionToChanges<T>(
+export async function scalarActionToChanges(
   action: ScalarAction<CompiledJsonPath | CompiledJsonIdPath>,
-  json: T,
-  adapter: JsonAdapter<T>,
-  idToPath: (id: Id) => PathArray | undefined
-): Promise<{
-  failures: Failure[];
-  changes: Change[];
-}>;
-
-export async function actionToChanges<T>(
-  action: ScalarAction<CompiledJsonPath | CompiledJsonIdPath>,
-  json: T,
-  adapter: JsonAdapter<T>,
-  idToPath: (id: Id) => PathArray | undefined = () => undefined
+  source: JsonSource
 ): Promise<{
   failures: Failure[];
   changes: Change[];
@@ -131,179 +151,156 @@ export async function actionToChanges<T>(
   const changes: Change[] = [];
   const { existing, potential, failures } = await queryPaths(
     action.path,
-    json,
-    adapter,
-    idToPath
+    source
   );
   switch (action.action) {
     case 'Set':
       for (const path of [...existing, ...potential]) {
-        if (isValidPath(path)) {
-          await fillNulls(changes, path, json, adapter);
-          changes.push({ type: 'Put', path, value: action.payload });
-        } else {
-          failures.push({ message: 'Set: cannot set root', path });
+        if (!path.byteLength) {
+          failures.push({
+            message: 'Set: cannot set root',
+            path: binaryPathToArray(path),
+          });
+          continue;
         }
+        await fillNulls(changes, path, source);
+        changes.push({ type: 'Put', path, value: action.payload });
       }
       break;
     case 'Delete':
       for (const path of existing) {
-        if (isValidPath(path)) {
-          const index = last(path);
-          if (typeof index === 'number') {
-            const parent = (path.slice(
-              0,
-              path.length - 1
-            ) as unknown) as AbsolutePathArray;
-            const { value } = await followPath(parent, json, adapter);
-            const length = await adapter.arrayLength(value as T);
-            if (length && length > index + 1) {
-              for (let i = index + 1; i < length; i++) {
-                changes.push({
-                  type: 'Move',
-                  from: [...parent, i],
-                  to: [...parent, i - 1],
-                });
-              }
-              continue;
-            }
-          }
-          changes.push({ type: 'Delete', path });
-        } else {
-          failures.push({ message: 'Delete: cannot delete root', path });
+        if (!path.byteLength) {
+          failures.push({
+            message: 'Delete: cannot delete root',
+            path: binaryPathToArray(path),
+          });
+          continue;
         }
+        const { parent, index } = binaryPathSplit(path);
+        if (typeof index === 'number') {
+          const node = await source.getByPath(parent);
+          assert(node && typeof node == 'object' && node.type === 'array');
+          if (node.length > index + 1) {
+            for (let i = index + 1; i < node.length; i++) {
+              changes.push({
+                type: 'Move',
+                from: binaryPathAppend(parent, i),
+                to: binaryPathAppend(parent, i - 1),
+              });
+            }
+            continue;
+          }
+        }
+        changes.push({ type: 'Delete', path });
       }
       break;
     case 'Add':
-      for (const path of existing) {
-        const { found, value } = await followPath(path, json, adapter);
-        if (
-          found &&
-          isValidPath(path) &&
-          adapter.typeOf(value as T) === 'number'
-        ) {
-          changes.push({
-            type: 'Put',
-            path,
-            value: (adapter.numberValue(value as T) as number) + action.payload,
-          });
-        } else {
-          failures.push({ message: 'Add: not a number', path });
-        }
-      }
-      break;
     case 'Multiply':
       for (const path of existing) {
-        const { found, value } = await followPath(path, json, adapter);
-        if (
-          found &&
-          isValidPath(path) &&
-          adapter.typeOf(value as T) === 'number'
-        ) {
-          changes.push({
-            type: 'Put',
-            path,
-            value: (adapter.numberValue(value as T) as number) * action.payload,
+        const node = await source.getByPath(path);
+        if (typeof node !== 'number') {
+          failures.push({
+            message: `${action.action}: not a number`,
+            path: binaryPathToArray(path),
           });
-        } else {
-          failures.push({ message: 'Multiply: not a number', path });
+          continue;
         }
+        changes.push({
+          type: 'Put',
+          path,
+          value:
+            action.action === 'Add'
+              ? node + action.payload
+              : node * action.payload,
+        });
       }
       break;
     case 'InitArray':
       for (const path of [...existing, ...potential]) {
-        if (isValidPath(path)) {
-          const { found, value } = await followPath(path, json, adapter);
-          if (found && adapter.typeOf(value as T) === 'array') {
-            changes.push({ type: 'Touch', path });
-          } else {
-            await fillNulls(changes, path, json, adapter);
-            changes.push({ type: 'Put', path, value: [] });
-          }
+        if (!path.byteLength) {
+          failures.push({ message: 'InitArray: cannot set root', path: [] });
+          continue;
+        }
+        const node = await source.getByPath(path);
+        if (node && typeof node === 'object' && node.type === 'array') {
+          changes.push({ type: 'Touch', path });
         } else {
-          failures.push({ message: 'InitArray: cannot set root', path });
+          await fillNulls(changes, path, source);
+          changes.push({ type: 'Put', path, value: [] });
         }
       }
       break;
     case 'InitObject':
       for (const path of [...existing, ...potential]) {
-        if (isValidPath(path)) {
-          const { found, value } = await followPath(path, json, adapter);
-          if (found && adapter.typeOf(value as T) === 'object') {
-            changes.push({ type: 'Touch', path });
-          } else {
-            await fillNulls(changes, path, json, adapter);
-            changes.push({ type: 'Put', path, value: {} });
-          }
+        if (!path.byteLength) {
+          continue;
+        }
+        const node = await source.getByPath(path);
+        if (node && typeof node === 'object' && node.type === 'object') {
+          changes.push({ type: 'Touch', path });
+        } else {
+          await fillNulls(changes, path, source);
+          changes.push({ type: 'Put', path, value: {} });
         }
       }
       break;
     case 'InsertBefore':
     case 'InsertAfter':
       for (const path of [...existing, ...potential]) {
-        let index = last(path);
-        if (typeof index === 'number' && isValidPath(path)) {
-          if (action.action === 'InsertAfter') {
-            index++;
-          }
-          const parent = (path.slice(
-            0,
-            path.length - 1
-          ) as unknown) as AbsolutePathArray;
-          const { value } = await followPath(parent, json, adapter);
-          const length = (await adapter.arrayLength(value as T)) || 0;
-          if (index > length) {
-            index = length;
-          }
-          for (let i = length; i > index; i--) {
-            changes.push({
-              type: 'Move',
-              from: [...parent, i - 1],
-              to: [...parent, i],
-            });
-          }
-          changes.push({
-            type: 'Put',
-            path: [...parent, index],
-            value: action.payload,
-          });
-        } else {
+        // eslint-disable-next-line prefer-const
+        let { index, parent } = binaryPathSplit(path);
+        if (typeof index !== 'number') {
           failures.push({
             message: `${action.action}: not an array index`,
-            path,
+            path: binaryPathToArray(path),
+          });
+          continue;
+        }
+        if (action.action === 'InsertAfter') {
+          index++;
+        }
+        const node = await source.getByPath(parent);
+        assert(node && typeof node === 'object' && node.type === 'array');
+        if (index > node.length) {
+          index = node.length;
+        }
+        for (let i = node.length; i > index; i--) {
+          changes.push({
+            type: 'Move',
+            from: binaryPathAppend(parent, i - 1),
+            to: binaryPathAppend(parent, i),
           });
         }
+        changes.push({
+          type: 'Put',
+          path: binaryPathAppend(parent, index),
+          value: action.payload,
+        });
       }
       break;
     case 'InsertUnique':
       nextPath: for (const path of existing) {
-        const { value } = await followPath(path, json, adapter);
-        const length = await adapter.arrayLength(value as T);
-        if (length != null) {
-          for (const [i, element] of (await adapter.listEntries(json)) || []) {
-            if (
-              await isJsonEqual(
-                element,
-                action.payload,
-                adapter,
-                JsonJsonAdapter
-              )
-            ) {
-              changes.push({
-                type: 'Touch',
-                path: ([...path, i] as unknown) as AbsolutePathArray,
-              });
-              continue nextPath;
-            }
-          }
-          changes.push({
-            type: 'Put',
-            path: ([...path, length] as unknown) as AbsolutePathArray,
-            value: action.payload,
+        const node = await source.getByPath(path);
+        if (!node || typeof node !== 'object' || node.type !== 'array') {
+          failures.push({
+            message: 'InsertUnique: not an array',
+            path: binaryPathToArray(path),
           });
-        } else {
-          failures.push({ message: 'InsertUnique: not an array', path });
+          continue;
         }
+        for (let i = 0; i < node.length; i++) {
+          const subpath = binaryPathAppend(path, i);
+          // FIXME: use isJsonEqual to avoid pulling entire array into memory
+          if (isEqual(action.payload, await sourceToJson(source, subpath))) {
+            changes.push({ type: 'Touch', path: subpath });
+            continue nextPath;
+          }
+        }
+        changes.push({
+          type: 'Put',
+          path: binaryPathAppend(path, node.length),
+          value: action.payload,
+        });
       }
       break;
     case 'Move': {
@@ -323,14 +320,12 @@ export async function actionToChanges<T>(
           path: jsonPathToString(action.path),
         });
         canMove = false;
-      } else if (!isValidPath(destinations[0])) {
+      } else if (!destinations[0].byteLength) {
         failures.push({ message: 'Move: cannot move to root', path: [] });
       }
       const { existing: sources, failures: sourceFailures } = await queryPaths(
         action.payload,
-        json,
-        adapter,
-        idToPath
+        source
       );
       failures.push(...sourceFailures);
       if (sourceFailures.length) {
@@ -350,30 +345,24 @@ export async function actionToChanges<T>(
           path: jsonPathToString(action.payload),
         });
         canMove = false;
-      } else if (!isValidPath(sources[0])) {
+      } else if (!sources[0].byteLength) {
         failures.push({ message: 'Move: cannot move root', path: [] });
       }
       if (canMove) {
-        const [to] = (potential as unknown) as AbsolutePathArray[];
-        const [from] = (sources as unknown) as AbsolutePathArray[];
-        await fillNulls(changes, to as AbsolutePathArray, json, adapter);
+        const [to] = potential;
+        const [from] = sources;
+        await fillNulls(changes, to, source);
         changes.push({ type: 'Move', from, to });
-        const index = last(from);
+        const { parent, index } = binaryPathSplit(from);
         if (typeof index === 'number') {
-          const parent = (from.slice(
-            0,
-            from.length - 1
-          ) as unknown) as AbsolutePathArray;
-          const { value } = await followPath(parent, json, adapter);
-          const length = await adapter.arrayLength(value as T);
-          if (length && length > index) {
-            for (let i = index; i < length; i++) {
-              changes.push({
-                type: 'Move',
-                from: [...parent, i + 1],
-                to: [...parent, i],
-              });
-            }
+          const node = await source.getByPath(parent);
+          assert(node && typeof node === 'object' && node.type === 'array');
+          for (let i = index; i < node.length; i++) {
+            changes.push({
+              type: 'Move',
+              from: binaryPathAppend(parent, i + 1),
+              to: binaryPathAppend(parent, i),
+            });
           }
         }
       }
@@ -382,9 +371,7 @@ export async function actionToChanges<T>(
     case 'Copy': {
       const { existing: sources, failures: sourceFailures } = await queryPaths(
         action.payload,
-        json,
-        adapter,
-        idToPath
+        source
       );
       failures.push(...sourceFailures);
       if (!sourceFailures.length) {
@@ -398,15 +385,14 @@ export async function actionToChanges<T>(
             message: 'Copy: more than one source path',
             path: jsonPathToString(action.payload),
           });
-        } else if (!isValidPath(sources[0])) {
+        } else if (!sources[0].byteLength) {
           failures.push({ message: 'Copy: cannot copy root', path: [] });
         } else {
           const [from] = sources;
-          const { value } = await followPath(from, json, adapter);
-          const jsonValue = await toJsonWithAdapter(value as T, adapter);
+          const jsonValue = await sourceToJson(source, from);
           for (const path of [...existing, ...potential]) {
-            if (isValidPath(path)) {
-              await fillNulls(changes, path, json, adapter);
+            if (path.byteLength) {
+              await fillNulls(changes, path, source);
               changes.push({ type: 'Put', path, value: jsonValue });
             } else {
               failures.push({ message: 'Copy: cannot copy to root', path: [] });
@@ -423,6 +409,66 @@ export async function actionToChanges<T>(
       });
   }
   return { changes, failures };
+}
+
+async function addParentKey(path: BinaryPath, dest: MutableJsonSource) {
+  const { parent, index } = binaryPathSplit(path);
+  if (typeof index === 'string') {
+    const keys = ((await dest.getByPath(parent)) as any)?.keys ?? [];
+    if (!keys.includes(index)) {
+      await dest.setByPath(parent, {
+        type: 'object',
+        keys: [...keys, index],
+      });
+    }
+  } else if (typeof index === 'number') {
+    const length = ((await dest.getByPath(parent)) as any)?.length ?? 0;
+    if (index >= length) {
+      await dest.setByPath(parent, { type: 'array', length: index + 1 });
+    }
+  }
+}
+
+async function deleteParentKey(path: BinaryPath, dest: MutableJsonSource) {
+  const { parent, index } = binaryPathSplit(path);
+  if (typeof index === 'string') {
+    const keys: string[] = ((await dest.getByPath(parent)) as any)?.keys ?? [];
+    await dest.setByPath(parent, {
+      type: 'object',
+      keys: keys.filter((k) => k !== index),
+    });
+  } else if (typeof index === 'number') {
+    const length = ((await dest.getByPath(parent)) as any)?.length ?? 0;
+    if (index === length - 1) {
+      await dest.setByPath(parent, { type: 'array', length: index });
+    }
+  }
+}
+
+export async function applyChange(
+  change: Change,
+  id: Id,
+  dest: MutableJsonSource
+): Promise<void> {
+  switch (change.type) {
+    case 'Put':
+      await jsonToSource(change.value, dest, change.path);
+      await dest.setIdsByPath(change.path, [id]);
+      await addParentKey(change.path, dest);
+      break;
+    case 'Delete':
+      await dest.deleteByPath(change.path);
+      await deleteParentKey(change.path, dest);
+      break;
+    case 'Touch':
+      await dest.setIdsByPath(change.path, [id]);
+      break;
+    case 'Move':
+      await deleteParentKey(change.from, dest);
+      await moveJson(change.from, change.to, dest);
+      await addParentKey(change.to, dest);
+      break;
+  }
 }
 
 export function mapAction<T, U>(

@@ -1,27 +1,27 @@
-import { JsonJsonAdapter } from './json-adapter';
-import { compileJsonPath, JsonPath, queryValues, Vars } from './jsonpath';
+import {
+  BinaryPath,
+  binaryPathToArray,
+  EMPTY_PATH,
+  pathArrayToBinary,
+} from './binary-path';
+import { AnonymousJsonSource, JsonNode, JsonSource } from './json-source';
+import {
+  compileJsonPath,
+  JsonPath,
+  queryPaths1,
+  queryValues,
+  Vars,
+} from './jsonpath';
 import Queryable from './queryable';
-import { Cancelable, Json, JsonObject } from './types';
+import { Cancelable, Json } from './types';
 
-export interface MetadataSource {
-  readonly initialState: Json;
-  subscribe(listener: (json: Json) => void): void;
-  unsubscribe(listener: (json: Json) => void): void;
+export interface MetadataSource extends JsonSource {
+  subscribe(listener: () => void): Cancelable;
 }
 
-export class MetaStore implements Queryable {
-  private state: JsonObject;
-
+export class MetaStore extends AnonymousJsonSource implements Queryable {
   constructor(private readonly sources: Record<string, MetadataSource>) {
-    this.state = {};
-    for (const key in sources) {
-      if (Object.prototype.hasOwnProperty.call(sources, key)) {
-        this.state = { ...this.state, [key]: sources[key].initialState };
-        sources[key].subscribe((json) => {
-          this.state = { ...this.state, [key]: json };
-        });
-      }
-    }
+    super();
   }
 
   subscribe(
@@ -34,63 +34,42 @@ export class MetaStore implements Queryable {
 
   subscribe(
     query: JsonPath,
-    arg1: any,
+    arg1: Vars | ((json: Json) => void),
     arg2?: (json: Json) => void
   ): Cancelable {
-    const path = compileJsonPath(query, arg2 ? arg1 : {});
-    const callback = arg2 || arg1;
-    let keys: readonly string[] = Object.keys(this.sources);
-    switch (path[0]?.type) {
-      case 'Key':
-        keys = [path[0].query];
-        break;
-      case 'MultiKey':
-        keys = path[0].query;
-        break;
-      case 'Index':
-      case 'MultiIndex':
-      case 'Slice':
-      case 'ExprSlice':
-        keys = [];
-        break;
-    }
-    const handlers = keys.map((key) => async (json: Json) =>
-      callback(
-        await queryValues(path, { ...this.state, [key]: json }, JsonJsonAdapter)
-      )
-    );
-    for (let i = 0; i < keys.length; i++) {
-      this.sources[keys[i]].subscribe(handlers[i]);
-    }
-    setImmediate(async () =>
-      callback(await queryValues(path, this.state, JsonJsonAdapter))
-    );
+    const path = compileJsonPath(query, typeof arg1 === 'function' ? {} : arg1);
+    const callback =
+      typeof arg1 === 'function' ? arg1 : (arg2 as (json: Json) => void);
+    const onUpdate = async () => callback(await queryValues(path, this));
+    const subscriptions = (async () => {
+      const sourcePaths = path.length
+        ? [
+            ...new Set(
+              (await queryPaths1(this, path[0], EMPTY_PATH)).existing.map(
+                (p) => binaryPathToArray(p)[0]
+              )
+            ),
+          ]
+        : Object.keys(this.sources);
+      return sourcePaths.map((key) => this.sources[key].subscribe(onUpdate));
+    })();
+    setImmediate(onUpdate);
     return {
       cancel() {
-        for (let i = 0; i < keys.length; i++) {
-          this.sources[keys[i]].unsubscribe(handlers[i]);
-        }
+        subscriptions.then((s) => s.forEach((c) => c.cancel()));
       },
     };
   }
 
   async queryOnce(query: JsonPath, vars: Vars = {}): Promise<Json[]> {
-    return queryValues(
-      compileJsonPath(query, vars),
-      this.state,
-      JsonJsonAdapter
-    );
-  }
-}
-
-export class ConstantMetadataSource implements MetadataSource {
-  constructor(readonly initialState: Json) {}
-
-  subscribe(listener: (json: Json) => void): void {
-    listener(this.initialState);
+    return queryValues(compileJsonPath(query, vars), this);
   }
 
-  unsubscribe(): void {
-    // do nothing
+  async getByPath(path: BinaryPath): Promise<JsonNode | undefined> {
+    if (!path.byteLength) {
+      return { type: 'object', keys: Object.keys(this.sources) };
+    }
+    const [head, ...subpath] = binaryPathToArray(path);
+    return this.sources[head]?.getByPath(pathArrayToBinary(subpath));
   }
 }

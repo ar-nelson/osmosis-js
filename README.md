@@ -319,13 +319,13 @@ history, in order. It is computed recursively:
 ```txt
 StateHash(0) = 00000000000000000000000000000000...
 
-StateHash(i + 1) = Blake2B([........ . . . ........][..............][......])
-                                                   |               |       |
-                             StateHash(i) (64 bytes)               |       |
-                                                                   |       |
-                                    Peer ID of Actions[i] (16 bytes)       |
+StateHash(i + 1) = Blake2B([........ . . . ........][......][..............])
+                                                   |       |               |
+                             StateHash(i) (64 bytes)       |               |
+                                                           |               |
+  Lamport number of Actions[i] (8 bytes, big-endian 64-bit uint)           |
                                                                            |
-              Lamport number of Actions[i] (8 bytes, big-endian 64-bit uint)
+                                            Peer ID of Actions[i] (16 bytes)
 ```
 
 If two peers have different State Hashes, they are out of sync and must be

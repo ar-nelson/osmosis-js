@@ -40,12 +40,19 @@ export function idIndex(
   return -1;
 }
 
+export function idToBinary(id: Id): Buffer {
+  const buffer = Buffer.alloc(24);
+  buffer.writeBigUInt64BE(BigInt(id.index), 0);
+  buffer.set(uuid.parse(id.author), 8);
+  return buffer;
+}
+
 export const ZERO_STATE_HASH = new Uint8Array(HASH_BYTES);
 
 export function nextStateHash(lastStateHash: Uint8Array, id: Id): Uint8Array {
-  const buffer = Buffer.alloc(HASH_BYTES + 16 + 8);
+  const buffer = Buffer.alloc(HASH_BYTES + 8 + 16);
   buffer.set(lastStateHash, 0);
-  buffer.set(uuid.parse(id.author), HASH_BYTES);
-  buffer.writeBigUInt64BE(BigInt(id.index), HASH_BYTES + 16);
+  buffer.writeBigUInt64BE(BigInt(id.index), HASH_BYTES);
+  buffer.set(uuid.parse(id.author), HASH_BYTES + 8);
   return crypto_blake2b(buffer);
 }

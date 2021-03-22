@@ -1,17 +1,16 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
-import { actionToChanges } from '../src/actions';
-import { JsonJsonAdapter } from '../src/json-adapter';
-import { Key, Index, Put, Delete, Touch, Move } from './mock-constructors';
+import { scalarActionToChanges } from '../src/actions';
+import { ConstantJsonSource } from '../src/json-source';
+import { Delete, Index, Key, Move, Put, Touch } from './mock-constructors';
 
 describe('JSON Action', function () {
   describe('Set', async function () {
     it('should set a key on the root object', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Set', path: [Key('foo')], payload: 2 },
-          { foo: 1 },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: 1 })
         )
       ).to.deep.equal({
         changes: [Put(['foo'], 2)],
@@ -21,14 +20,13 @@ describe('JSON Action', function () {
 
     it('should set multi-level paths', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           {
             action: 'Set',
             path: [Key('foo'), Key('bar'), Index(1), Key('baz')],
             payload: 'qux',
           },
-          { foo: { bar: [{}, {}] } },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: { bar: [{}, {}] } })
         )
       ).to.deep.equal({
         changes: [Put(['foo', 'bar', 1, 'baz'], 'qux')],
@@ -38,10 +36,9 @@ describe('JSON Action', function () {
 
     it('should overwrite existing array elements', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Set', path: [Key('foo'), Index(1)], payload: 25 },
-          { foo: [10, 20, 30] },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: [10, 20, 30] })
         )
       ).to.deep.equal({
         changes: [Put(['foo', 1], 25)],
@@ -51,10 +48,9 @@ describe('JSON Action', function () {
 
     it('should add a trailing array element', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Set', path: [Key('foo'), Index(3)], payload: 40 },
-          { foo: [10, 20, 30] },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: [10, 20, 30] })
         )
       ).to.deep.equal({
         changes: [Put(['foo', 3], 40)],
@@ -64,10 +60,9 @@ describe('JSON Action', function () {
 
     it('should add an element past the end of an array, inserting nulls in between', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Set', path: [Key('foo'), Index(6)], payload: 40 },
-          { foo: [10, 20, 30] },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: [10, 20, 30] })
         )
       ).to.deep.equal({
         changes: [
@@ -82,10 +77,9 @@ describe('JSON Action', function () {
 
     it('should report failure when a path does not exist', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Set', path: [Key('baz'), Key('qux')], payload: 3 },
-          { foo: 1, bar: 2 },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: 1, bar: 2 })
         )
       ).to.deep.equal({
         changes: [],
@@ -102,10 +96,9 @@ describe('JSON Action', function () {
   describe('Delete', async function () {
     it('should delete a key on the root object', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Delete', path: [Key('bar')] },
-          { foo: 1, bar: 2 },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: 1, bar: 2 })
         )
       ).to.deep.equal({
         changes: [Delete(['bar'])],
@@ -115,10 +108,9 @@ describe('JSON Action', function () {
 
     it('should delete deep object keys', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Delete', path: [Key('foo'), Key('bar'), Key('baz')] },
-          { foo: { bar: { baz: { qux: {} } } } },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: { bar: { baz: { qux: {} } } } })
         )
       ).to.deep.equal({
         changes: [Delete(['foo', 'bar', 'baz'])],
@@ -128,10 +120,9 @@ describe('JSON Action', function () {
 
     it('should delete trailing array elements', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Delete', path: [Key('foo'), Index(2)] },
-          { foo: [1, 2, 3] },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: [1, 2, 3] })
         )
       ).to.deep.equal({
         changes: [Delete(['foo', 2])],
@@ -141,10 +132,9 @@ describe('JSON Action', function () {
 
     it('should shift remaining array elements to fill a deleted space', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Delete', path: [Key('foo'), Index(1)] },
-          { foo: [1, 2, 3, 4] },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: [1, 2, 3, 4] })
         )
       ).to.deep.equal({
         changes: [Move(['foo', 2], ['foo', 1]), Move(['foo', 3], ['foo', 2])],
@@ -154,10 +144,9 @@ describe('JSON Action', function () {
 
     it('should report failure when a path does not exist', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'Delete', path: [Key('baz'), Key('qux')] },
-          { foo: 1, bar: 2 },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: 1, bar: 2 })
         )
       ).to.deep.equal({
         changes: [],
@@ -174,10 +163,9 @@ describe('JSON Action', function () {
   describe('InitArray', async function () {
     it('should set a non-array key to []', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'InitArray', path: [Key('foo')] },
-          { foo: {} },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: {} })
         )
       ).to.deep.equal({
         changes: [Put(['foo'], [])],
@@ -187,10 +175,9 @@ describe('JSON Action', function () {
 
     it('should set a nonexistent key to []', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'InitArray', path: [Key('bar')] },
-          { foo: 1 },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: 1 })
         )
       ).to.deep.equal({
         changes: [Put(['bar'], [])],
@@ -200,10 +187,9 @@ describe('JSON Action', function () {
 
     it('should ignore an existing array', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'InitArray', path: [Key('foo')] },
-          { foo: [1, 2, 3] },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: [1, 2, 3] })
         )
       ).to.deep.equal({
         changes: [Touch(['foo'])],
@@ -213,10 +199,9 @@ describe('JSON Action', function () {
 
     it('should report failure when a path does not exist', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'InitArray', path: [Key('baz'), Key('qux')] },
-          { foo: 1, bar: 2 },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: 1, bar: 2 })
         )
       ).to.deep.equal({
         changes: [],
@@ -233,10 +218,9 @@ describe('JSON Action', function () {
   describe('InitObject', async function () {
     it('should set a non-object key to {}', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'InitObject', path: [Key('foo')] },
-          { foo: [] },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: [] })
         )
       ).to.deep.equal({
         changes: [Put(['foo'], {})],
@@ -246,10 +230,9 @@ describe('JSON Action', function () {
 
     it('should set a nonexistent key to {}', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'InitObject', path: [Key('bar')] },
-          { foo: 1 },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: 1 })
         )
       ).to.deep.equal({
         changes: [Put(['bar'], {})],
@@ -259,10 +242,9 @@ describe('JSON Action', function () {
 
     it('should ignore an existing object', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'InitObject', path: [Key('foo')] },
-          { foo: { bar: 'baz' } },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: { bar: 'baz' } })
         )
       ).to.deep.equal({
         changes: [Touch(['foo'])],
@@ -272,10 +254,9 @@ describe('JSON Action', function () {
 
     it('should report failure when a path does not exist', async function () {
       expect(
-        await actionToChanges(
+        await scalarActionToChanges(
           { action: 'InitObject', path: [Key('baz'), Key('qux')] },
-          { foo: 1, bar: 2 },
-          JsonJsonAdapter
+          new ConstantJsonSource({ foo: 1, bar: 2 })
         )
       ).to.deep.equal({
         changes: [],

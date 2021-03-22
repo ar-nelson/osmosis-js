@@ -2,11 +2,19 @@ import { expect } from 'chai';
 import { before, beforeEach, describe, it } from 'mocha';
 import * as Monocypher from 'monocypher-wasm';
 import * as uuid from 'uuid';
-import { Change } from '../src/actions';
-import { idCompare, nextStateHash, ZERO_STATE_HASH } from '../src/id';
-import InMemorySaveState from '../src/in-memory-save-state';
-import { JsonCacheStructureMarker } from '../src/json-cache';
-import { Op, StateSummary } from '../src/save-state';
+import {
+  Change,
+  Id,
+  idCompare,
+  InMemorySaveState,
+  nextStateHash,
+  Op,
+  StateSummary,
+  ZERO_STATE_HASH,
+} from '../src';
+import { EMPTY_PATH, pathArrayToBinary } from '../src/binary-path';
+import { JsonNode } from '../src/json-source';
+import { PathArray } from '../src/types';
 import { Index, Key, Move, Put, Touch } from './mock-constructors';
 
 describe('SaveState', function () {
@@ -20,6 +28,30 @@ describe('SaveState', function () {
     saveState = new InMemorySaveState({ metadata: {} });
   });
 
+  async function expectRoot(...keys: string[]) {
+    const root = (await saveState.getByPath(EMPTY_PATH)) as {
+      type: 'object';
+      keys: string[];
+    };
+    expect(root).to.include({ type: 'object' });
+    expect(root.keys).to.have.length(keys.length);
+    for (const key of keys) {
+      expect(root.keys).to.include(key);
+    }
+  }
+
+  async function expectPath(path: PathArray, value: JsonNode, ...ids: Id[]) {
+    const binPath = pathArrayToBinary(path);
+    const node = await saveState.getByPath(binPath);
+    expect(node).to.deep.equal(value);
+    const actualIds = await saveState.getIdsByPath(binPath);
+    expect(actualIds).to.have.length(ids.length);
+    for (const id of ids) {
+      expect(actualIds).to.deep.include(id);
+      expect(await saveState.getPathById(id)).to.deep.equal(binPath);
+    }
+  }
+
   it('should set and query a single value', async function () {
     const { changes, failures } = await saveState.insert([
       {
@@ -29,14 +61,15 @@ describe('SaveState', function () {
         id: { author: uuid.NIL, index: 1 },
       },
     ]);
-    expect(changes).to.deep.equal([Put(['foo'], 'bar')]);
-    expect(failures).to.be.empty;
-    const entries = await saveState.listObject([]);
-    expect(entries).to.deep.include({
-      key: 'foo',
-      value: 'bar',
-      ids: [{ author: uuid.NIL, index: 1 }],
-    });
+    expect(failures).to.deep.equal([]);
+    expect(
+      changes.map((c) => {
+        delete (c as any).id;
+        return c;
+      })
+    ).to.deep.equal([Put(['foo'], 'bar')]);
+    expectRoot('foo');
+    expectPath(['foo'], 'bar', { author: uuid.NIL, index: 1 });
   });
 
   function testInMultipleOrders(
@@ -60,6 +93,7 @@ describe('SaveState', function () {
     describe(name, function () {
       it('should apply in order in one insert', async function () {
         const { changes, failures } = await saveState.insert(ops);
+        changes.forEach((c: any) => delete c.id);
         expect(failures).to.deep.equal([]);
         for (const cs of expectedChanges) {
           for (const c of cs) {
@@ -75,6 +109,7 @@ describe('SaveState', function () {
       it('should apply in order in multiple inserts', async function () {
         for (let i = 0; i < ops.length; i++) {
           const { changes, failures } = await saveState.insert([ops[i]]);
+          changes.forEach((c: any) => delete c.id);
           if (i === 0) {
             expect(failures).to.deep.equal([]);
           }
@@ -92,6 +127,7 @@ describe('SaveState', function () {
         const { changes, failures } = await saveState.insert(
           [...ops].reverse()
         );
+        changes.forEach((c: any) => delete c.id);
         expect(failures).to.deep.equal([]);
         for (const cs of expectedChanges) {
           for (const c of cs) {
@@ -114,6 +150,7 @@ describe('SaveState', function () {
           }
           allChanges.push(...changes);
         }
+        allChanges.forEach((c: any) => delete c.id);
         for (const cs of expectedChanges) {
           for (const c of cs) {
             expect(allChanges).to.deep.include(c);
@@ -151,23 +188,10 @@ describe('SaveState', function () {
     ],
     [[Put(['foo'], 1)], [Put(['bar'], 2)], [Put(['baz'], 3)]],
     async () => {
-      const entries = await saveState.listObject([]);
-      expect(entries).to.have.length(3);
-      expect(entries).to.deep.include({
-        key: 'foo',
-        value: 1,
-        ids: [{ author: uuid.NIL, index: 1 }],
-      });
-      expect(entries).to.deep.include({
-        key: 'bar',
-        value: 2,
-        ids: [{ author: uuid.NIL, index: 2 }],
-      });
-      expect(entries).to.deep.include({
-        key: 'baz',
-        value: 3,
-        ids: [{ author: uuid.NIL, index: 3 }],
-      });
+      expectRoot('foo', 'bar', 'baz');
+      expectPath(['foo'], 1, { author: uuid.NIL, index: 1 });
+      expectPath(['bar'], 2, { author: uuid.NIL, index: 2 });
+      expectPath(['baz'], 3, { author: uuid.NIL, index: 3 });
     }
   );
 
@@ -195,22 +219,18 @@ describe('SaveState', function () {
     ],
     [[Put(['foo'], 1)], [Put(['bar'], 2)], [Put(['baz'], 3)]],
     async () => {
-      const entries = await saveState.listObject([]);
-      expect(entries).to.have.length(3);
-      expect(entries).to.deep.include({
-        key: 'foo',
-        value: 1,
-        ids: [{ author: '0b189e54-98ba-48ef-8129-cf4079a0df7b', index: 1 }],
+      expectRoot('foo', 'bar', 'baz');
+      expectPath(['foo'], 1, {
+        author: '0b189e54-98ba-48ef-8129-cf4079a0df7b',
+        index: 1,
       });
-      expect(entries).to.deep.include({
-        key: 'bar',
-        value: 2,
-        ids: [{ author: 'a4259bce-45f5-4a31-b1d0-9bcc93b1abe6', index: 1 }],
+      expectPath(['bar'], 2, {
+        author: 'a4259bce-45f5-4a31-b1d0-9bcc93b1abe6',
+        index: 1,
       });
-      expect(entries).to.deep.include({
-        key: 'baz',
-        value: 3,
-        ids: [{ author: 'ab92f44f-2a3b-418b-8f39-f66932bf6170', index: 1 }],
+      expectPath(['baz'], 3, {
+        author: 'ab92f44f-2a3b-418b-8f39-f66932bf6170',
+        index: 1,
       });
     }
   );
@@ -225,7 +245,7 @@ describe('SaveState', function () {
     })),
     [...new Array(100)].map((_, i) => [Put([`k${i}`], i)]),
     async () => {
-      expect(await saveState.listObject([])).to.have.length(100);
+      expectRoot(...[...new Array(100)].map((_, i) => `k${i}`));
     }
   );
 
@@ -253,13 +273,8 @@ describe('SaveState', function () {
     ],
     [[Put(['foo'], 1)], [Put(['foo'], 2)], [Put(['foo'], 3)]],
     async () => {
-      expect(await saveState.listObject([])).to.deep.equal([
-        {
-          key: 'foo',
-          value: 3,
-          ids: [{ author: uuid.NIL, index: 3 }],
-        },
-      ]);
+      expectRoot('foo');
+      expectPath(['foo'], 3, { author: uuid.NIL, index: 3 });
     }
   );
 
@@ -273,13 +288,8 @@ describe('SaveState', function () {
     })),
     [...new Array(100)].map((_, i) => [Put(['foo'], i)]),
     async () => {
-      expect(await saveState.listObject([])).to.deep.equal([
-        {
-          key: 'foo',
-          value: 99,
-          ids: [{ author: uuid.NIL, index: 100 }],
-        },
-      ]);
+      expectRoot('foo');
+      expectPath(['foo'], 99, { author: uuid.NIL, index: 100 });
     }
   );
 
@@ -317,20 +327,15 @@ describe('SaveState', function () {
       [Put(['foo', 2], 'c')],
     ],
     async () => {
-      const entries = await saveState.listArray(['foo']);
-      expect(entries).to.have.length(3);
-      expect(entries[0]).to.deep.include({
-        value: 'a',
-        ids: [{ author: uuid.NIL, index: 2 }],
-      });
-      expect(entries[1]).to.deep.include({
-        value: 'b',
-        ids: [{ author: uuid.NIL, index: 3 }],
-      });
-      expect(entries[2]).to.deep.include({
-        value: 'c',
-        ids: [{ author: uuid.NIL, index: 4 }],
-      });
+      expectRoot('foo');
+      expectPath(
+        ['foo'],
+        { type: 'array', length: 3 },
+        { author: uuid.NIL, index: 1 }
+      );
+      expectPath(['foo', 0], 'a', { author: uuid.NIL, index: 2 });
+      expectPath(['foo', 1], 'b', { author: uuid.NIL, index: 3 });
+      expectPath(['foo', 2], 'c', { author: uuid.NIL, index: 4 });
     }
   );
 
@@ -368,21 +373,15 @@ describe('SaveState', function () {
       [Put(['foo', 2], 'c')],
     ],
     async () => {
-      const entries = await saveState.listArray(['foo']);
-      expect(entries).to.deep.equal([
-        {
-          value: 'a',
-          ids: [{ author: uuid.NIL, index: 2 }],
-        },
-        {
-          value: 'b',
-          ids: [{ author: uuid.NIL, index: 3 }],
-        },
-        {
-          value: 'c',
-          ids: [{ author: uuid.NIL, index: 4 }],
-        },
-      ]);
+      expectRoot('foo');
+      expectPath(
+        ['foo'],
+        { type: 'array', length: 3 },
+        { author: uuid.NIL, index: 1 }
+      );
+      expectPath(['foo', 0], 'a', { author: uuid.NIL, index: 2 });
+      expectPath(['foo', 1], 'b', { author: uuid.NIL, index: 3 });
+      expectPath(['foo', 2], 'c', { author: uuid.NIL, index: 4 });
     }
   );
 
@@ -424,21 +423,15 @@ describe('SaveState', function () {
       ],
     ],
     async () => {
-      const entries = await saveState.listArray(['foo']);
-      expect(entries).to.deep.equal([
-        {
-          value: 'a',
-          ids: [{ author: uuid.NIL, index: 4 }],
-        },
-        {
-          value: 'b',
-          ids: [{ author: uuid.NIL, index: 3 }],
-        },
-        {
-          value: 'c',
-          ids: [{ author: uuid.NIL, index: 2 }],
-        },
-      ]);
+      expectRoot('foo');
+      expectPath(
+        ['foo'],
+        { type: 'array', length: 3 },
+        { author: uuid.NIL, index: 1 }
+      );
+      expectPath(['foo', 0], 'a', { author: uuid.NIL, index: 4 });
+      expectPath(['foo', 1], 'b', { author: uuid.NIL, index: 3 });
+      expectPath(['foo', 2], 'c', { author: uuid.NIL, index: 2 });
     }
   );
 
@@ -463,25 +456,14 @@ describe('SaveState', function () {
     ],
     [[Put(['foo'], {})], [Touch(['foo'])], [Touch(['foo'])]],
     async () => {
-      const entries = await saveState.listObject([]);
-      expect(entries).to.have.length(1);
-      expect(entries[0]).to.include({
-        key: 'foo',
-        value: JsonCacheStructureMarker.Object,
-      });
-      expect(entries[0].ids).to.have.length(3);
-      expect(entries[0].ids).to.deep.include({
-        author: uuid.NIL,
-        index: 1,
-      });
-      expect(entries[0].ids).to.deep.include({
-        author: uuid.NIL,
-        index: 2,
-      });
-      expect(entries[0].ids).to.deep.include({
-        author: uuid.NIL,
-        index: 3,
-      });
+      expectRoot('foo');
+      expectPath(
+        ['foo'],
+        { type: 'object', keys: [] },
+        { author: uuid.NIL, index: 1 },
+        { author: uuid.NIL, index: 2 },
+        { author: uuid.NIL, index: 3 }
+      );
     }
   );
 });

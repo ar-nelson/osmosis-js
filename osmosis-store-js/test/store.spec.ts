@@ -95,7 +95,7 @@ describe('Store', function () {
         payload: i++,
       });
     }
-    const ts = (index) => ({ author: UUID1, index });
+    const ts = (index: number) => ({ author: UUID1, index });
     const savePoints = [
       {
         id: ZERO_ID,

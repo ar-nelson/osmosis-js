@@ -26,6 +26,7 @@
     "@babel/preset-typescript": "^7.12.1",
     "@babel/register": "^7.12.1",
     "@types/chai": "^4.2.14",
+    "@types/chance": "^1.1.1",
     "@types/lodash.flatmap": "^4.5.6",
     "@types/lodash.isequal": "^4.5.5",
     "@types/lodash.isplainobject": "^4.0.6",
@@ -38,6 +39,7 @@
     "@typescript-eslint/eslint-plugin": "^4.6.1",
     "@typescript-eslint/parser": "^4.6.1",
     "chai": "^4.2.0",
+    "chance": "^1.1.7",
     "eslint": "^7.12.1",
     "mocha": "^8.2.1",
     "prettier": "^2.1.2",
@@ -45,14 +47,15 @@
     "typescript": "^4.0.5"
   },
   "dependencies": {
-    "immer": "^7.0.14",
     "lodash.flatmap": "^4.5.0",
     "lodash.isequal": "^4.5.0",
     "lodash.isplainobject": "^4.0.6",
     "lodash.last": "^3.0.0",
     "lodash.sortedindexby": "^4.6.0",
     "monocypher-wasm": "^3.1.2-3",
+    "msgpackr": "^1.2.7",
     "nearley": "^2.19.7",
+    "tmp-promise": "^3.0.2",
     "uuid": "^8.3.2"
   }
 }

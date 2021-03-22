@@ -1,13 +1,19 @@
 import nearley from 'nearley';
 import { Action, mapAction, ScalarAction } from './actions';
+import {
+  BinaryPath,
+  binaryPathAppend,
+  binaryPathToArray,
+  EMPTY_PATH,
+  pathArrayToBinary,
+} from './binary-path';
 import { Id } from './id';
 import {
-  followPath,
-  JsonAdapter,
-  JsonAdapterResult,
-  PlusScalarAdapter,
-  toJsonWithAdapter,
-} from './json-adapter';
+  JsonNode,
+  JsonSource,
+  JsonStructure,
+  sourceToJson,
+} from './json-source';
 import grammar from './jsonpath.grammar';
 import { Failure, Json, JsonScalar, PathArray } from './types';
 import { flatMap, flatMapAsync, isEqual, reduceAsync } from './utils';
@@ -151,22 +157,31 @@ export class ExprError extends Error {
   }
 }
 
-export async function evalJsonPathExpr<T>(
-  self: T,
-  adapter: PlusScalarAdapter<T>,
+export type TaggedNode = JsonScalar | (JsonStructure & { path: BinaryPath });
+
+export async function getTaggedNode(
+  source: JsonSource,
+  path: BinaryPath
+): Promise<TaggedNode | undefined> {
+  const node = await source.getByPath(path);
+  if (node && typeof node === 'object') {
+    return { ...node, path };
+  }
+  return node;
+}
+
+export async function evalJsonPathExpr(
+  self: TaggedNode,
+  source: JsonSource,
   expr: JsonPathExpr
-): Promise<JsonScalar | T> {
+): Promise<TaggedNode> {
   async function expectNumber(
     op: string,
-    json: Promise<JsonScalar | T>
+    json: Promise<TaggedNode>
   ): Promise<number> {
-    const n = adapter.numberValue(await json);
-    if (n == null) {
-      throw new ExprError(
-        `${op}: expected number, got ${JSON.stringify(
-          await toJsonWithAdapter(await json, adapter)
-        )}`
-      );
+    const n = await json;
+    if (typeof n !== 'number') {
+      throw new ExprError(`${op}: expected number, got ${JSON.stringify(n)}`);
     }
     return n;
   }
@@ -177,493 +192,463 @@ export async function evalJsonPathExpr<T>(
     case 'self':
       return self;
     case 'subscript': {
-      const parent = await evalJsonPathExpr(self, adapter, expr[1]);
-      const subscript = await evalJsonPathExpr(self, adapter, expr[2]);
-      let result: JsonAdapterResult<JsonScalar | T> | undefined = undefined;
-      const index = adapter.numberValue(subscript);
-      if (index) {
-        result = await adapter.getIndex(self, index);
-      } else {
-        const key = adapter.stringValue(subscript);
-        if (key) {
-          result = await adapter.getKey(self, key);
-        }
-      }
-      if (!result) {
+      const parent = await evalJsonPathExpr(self, source, expr[1]);
+      if (!parent || typeof parent !== 'object') {
         throw new ExprError(
-          `subscript: ${JSON.stringify(
-            await toJsonWithAdapter(subscript, adapter)
-          )} is not a valid index or key`
-        );
-      } else if (!result.canExist) {
-        // FIXME: It's dangerous to stringify a potentially huge object like this
-        throw new ExprError(
-          `subscript: ${JSON.stringify(
-            await toJsonWithAdapter(subscript, adapter)
-          )} is not a valid index for non-array value ${JSON.stringify(
-            await toJsonWithAdapter(parent, adapter)
-          )}`
-        );
-      } else if (!result.exists) {
-        throw new ExprError(
-          `subscript: element ${JSON.stringify(
-            await toJsonWithAdapter(subscript, adapter)
-          )} does not exist`
+          `subscript: ${JSON.stringify(parent)} is not an array or object`
         );
       }
-      return result.value as JsonScalar | T;
+      const subscript = await evalJsonPathExpr(self, source, expr[2]);
+      if (typeof subscript !== 'number' && typeof subscript !== 'string') {
+        throw new ExprError(
+          `subscript: ${JSON.stringify(subscript)} is not a valid index or key`
+        );
+      }
+      const path = binaryPathAppend(parent.path, subscript);
+      const result = await getTaggedNode(source, path);
+      if (result === undefined) {
+        throw new ExprError(
+          `subscript: element ${JSON.stringify(subscript)} does not exist`
+        );
+      }
+      return result;
     }
     case 'neg':
-      return -expectNumber('-', evalJsonPathExpr(self, adapter, expr[1]));
+      return -expectNumber('-', evalJsonPathExpr(self, source, expr[1]));
     case '!':
-      return !evalJsonPathExpr(self, adapter, expr[1]);
+      return !evalJsonPathExpr(self, source, expr[1]);
     case '+':
       return (
-        (await expectNumber('+', evalJsonPathExpr(self, adapter, expr[1]))) +
-        (await expectNumber('+', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('+', evalJsonPathExpr(self, source, expr[1]))) +
+        (await expectNumber('+', evalJsonPathExpr(self, source, expr[2])))
       );
     case '-':
       return (
-        (await expectNumber('-', evalJsonPathExpr(self, adapter, expr[1]))) -
-        (await expectNumber('-', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('-', evalJsonPathExpr(self, source, expr[1]))) -
+        (await expectNumber('-', evalJsonPathExpr(self, source, expr[2])))
       );
     case '*':
       return (
-        (await expectNumber('*', evalJsonPathExpr(self, adapter, expr[1]))) *
-        (await expectNumber('*', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('*', evalJsonPathExpr(self, source, expr[1]))) *
+        (await expectNumber('*', evalJsonPathExpr(self, source, expr[2])))
       );
     case '/':
       return (
-        (await expectNumber('/', evalJsonPathExpr(self, adapter, expr[1]))) /
-        (await expectNumber('/', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('/', evalJsonPathExpr(self, source, expr[1]))) /
+        (await expectNumber('/', evalJsonPathExpr(self, source, expr[2])))
       );
     case '%':
       return (
-        (await expectNumber('%', evalJsonPathExpr(self, adapter, expr[1]))) %
-        (await expectNumber('%', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('%', evalJsonPathExpr(self, source, expr[1]))) %
+        (await expectNumber('%', evalJsonPathExpr(self, source, expr[2])))
       );
     case '<':
       return (
-        (await expectNumber('<', evalJsonPathExpr(self, adapter, expr[1]))) <
-        (await expectNumber('<', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('<', evalJsonPathExpr(self, source, expr[1]))) <
+        (await expectNumber('<', evalJsonPathExpr(self, source, expr[2])))
       );
     case '<=':
       return (
-        (await expectNumber('<=', evalJsonPathExpr(self, adapter, expr[1]))) <=
-        (await expectNumber('<=', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('<=', evalJsonPathExpr(self, source, expr[1]))) <=
+        (await expectNumber('<=', evalJsonPathExpr(self, source, expr[2])))
       );
     case '>':
       return (
-        (await expectNumber('>', evalJsonPathExpr(self, adapter, expr[1]))) >
-        (await expectNumber('>', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('>', evalJsonPathExpr(self, source, expr[1]))) >
+        (await expectNumber('>', evalJsonPathExpr(self, source, expr[2])))
       );
     case '>=':
       return (
-        (await expectNumber('>=', evalJsonPathExpr(self, adapter, expr[1]))) >=
-        (await expectNumber('>=', evalJsonPathExpr(self, adapter, expr[2])))
+        (await expectNumber('>=', evalJsonPathExpr(self, source, expr[1]))) >=
+        (await expectNumber('>=', evalJsonPathExpr(self, source, expr[2])))
       );
     case '==':
-      return isEqual(
-        await toJsonWithAdapter(
-          await evalJsonPathExpr(self, adapter, expr[1]),
-          adapter
-        ),
-        await toJsonWithAdapter(
-          await evalJsonPathExpr(self, adapter, expr[2]),
-          adapter
-        )
+    case '!=': {
+      const a = await evalJsonPathExpr(self, source, expr[1]);
+      const b = await evalJsonPathExpr(self, source, expr[1]);
+      return (
+        isEqual(
+          a && typeof a === 'object' ? await sourceToJson(source, a.path) : a,
+          b && typeof b === 'object' ? await sourceToJson(source, b.path) : b
+        ) ===
+        (expr[0] === '==')
       );
-    case '!=':
-      return !isEqual(
-        await toJsonWithAdapter(
-          await evalJsonPathExpr(self, adapter, expr[1]),
-          adapter
-        ),
-        await toJsonWithAdapter(
-          await evalJsonPathExpr(self, adapter, expr[2]),
-          adapter
-        )
-      );
+    }
     case '&&': {
-      const first = await evalJsonPathExpr(self, adapter, expr[1]);
-      return adapter.booleanValue(first)
-        ? evalJsonPathExpr(self, adapter, expr[2])
-        : first;
+      const first = await evalJsonPathExpr(self, source, expr[1]);
+      return first ? evalJsonPathExpr(self, source, expr[2]) : first;
     }
     case '||': {
-      const first = await evalJsonPathExpr(self, adapter, expr[1]);
-      return adapter.booleanValue(first)
-        ? first
-        : evalJsonPathExpr(self, adapter, expr[2]);
+      const first = await evalJsonPathExpr(self, source, expr[1]);
+      return first ? first : evalJsonPathExpr(self, source, expr[2]);
     }
     case 'if':
-      return adapter.booleanValue(
-        await evalJsonPathExpr(self, adapter, expr[1])
-      )
-        ? evalJsonPathExpr(self, adapter, expr[2])
-        : evalJsonPathExpr(self, adapter, expr[3]);
+      return (await evalJsonPathExpr(self, source, expr[1]))
+        ? evalJsonPathExpr(self, source, expr[2])
+        : evalJsonPathExpr(self, source, expr[3]);
     default:
       throw new ExprError(`not an expression: ${expr[0]}`);
   }
 }
 
-async function adjustIndex<T>(
-  index: number,
-  array: T,
-  adapter: JsonAdapter<T>
-): Promise<number> {
+function adjustIndex(index: number, array: { length: number }): number {
   let i = Math.floor(index);
-  const len = (await adapter.arrayLength(array)) || 0;
-  if (len > 0) {
+  if (array.length > 0) {
     while (i < 0) {
-      i += len;
+      i += array.length;
     }
   }
   return i;
 }
 
-async function queryPaths1<T>(
-  json: T,
-  adapter: JsonAdapter<T>,
-  segment: JsonPathSegment
+function isArray(
+  node: JsonNode | undefined
+): node is { type: 'array'; length: number } {
+  return !!node && typeof node == 'object' && node.type === 'array';
+}
+
+function isObject(
+  node: JsonNode | undefined
+): node is { type: 'object'; keys: string[] } {
+  return !!node && typeof node == 'object' && node.type === 'object';
+}
+
+export async function queryPaths1(
+  source: JsonSource,
+  segment: JsonPathSegment,
+  path: BinaryPath
 ): Promise<{
-  existing: PathArray[];
-  potential: PathArray[];
+  existing: BinaryPath[];
+  potential: BinaryPath[];
   failures: Failure[];
 }> {
-  let existing: PathArray[] = [];
-  const potential: PathArray[] = [];
+  let existing: BinaryPath[] = [];
+  const potential: BinaryPath[] = [];
   const failures: Failure[] = [];
-  function pushOne(
-    index: string | number,
-    { canExist, exists }: JsonAdapterResult<T>
-  ) {
-    if (canExist) {
-      (exists ? existing : potential).push([index]);
-    } else {
-      failures.push({
-        path: [index],
-        message: 'path does not exist',
-      });
-    }
-  }
   switch (segment.type) {
-    case 'Wildcard':
-      existing = (await adapter.listEntries(json))?.map(([k]) => [k]) || [];
+    case 'Wildcard': {
+      const node = await source.getByPath(path);
+      if (isArray(node)) {
+        existing = [...new Array(node.length)].map((_, i) =>
+          binaryPathAppend(path, i)
+        );
+      } else if (isObject(node)) {
+        existing = node.keys.map((k) => binaryPathAppend(path, k));
+      }
       break;
-    case 'Key':
-      pushOne(segment.query, await adapter.getKey(json, segment.query));
+    }
+    case 'Key': {
+      const subpath = binaryPathAppend(path, segment.query);
+      if ((await source.getByPath(subpath)) === undefined) {
+        if (!isObject(await source.getByPath(path))) {
+          failures.push({
+            path: binaryPathToArray(subpath),
+            message: 'path does not exist',
+          });
+        } else {
+          potential.push(subpath);
+        }
+      } else {
+        existing.push(subpath);
+      }
       break;
-    case 'Index':
-      pushOne(
-        segment.query,
-        await adapter.getIndex(
-          json,
-          await adjustIndex(segment.query, json, adapter)
-        )
-      );
+    }
+    case 'Index': {
+      const subpath = binaryPathAppend(path, segment.query);
+      if ((await source.getByPath(subpath)) === undefined) {
+        if (!isArray(await source.getByPath(path))) {
+          failures.push({
+            path: binaryPathToArray(subpath),
+            message: 'path does not exist',
+          });
+        } else {
+          potential.push(subpath);
+        }
+      } else {
+        existing.push(subpath);
+      }
       break;
+    }
     case 'MultiKey':
+      if (!isObject(await source.getByPath(path))) {
+        failures.push(
+          ...segment.query.map((key) => ({
+            path: [...binaryPathToArray(path), key],
+            message: 'path does not exist',
+          }))
+        );
+      }
       for (const key of segment.query) {
-        pushOne(key, await adapter.getKey(json, key));
+        const subpath = binaryPathAppend(path, key);
+        if ((await source.getByPath(subpath)) === undefined) {
+          potential.push(subpath);
+        } else {
+          existing.push(subpath);
+        }
       }
       break;
     case 'MultiIndex':
-      for (const index of segment.query) {
-        pushOne(
-          index,
-          await adapter.getIndex(json, await adjustIndex(index, json, adapter))
+      if (!isArray(await source.getByPath(path))) {
+        failures.push(
+          ...segment.query.map((index) => ({
+            path: [...binaryPathToArray(path), index],
+            message: 'path does not exist',
+          }))
         );
+        break;
+      }
+      for (const index of segment.query) {
+        const subpath = binaryPathAppend(path, index);
+        if ((await source.getByPath(subpath)) === undefined) {
+          potential.push(subpath);
+        } else {
+          existing.push(subpath);
+        }
       }
       break;
-    case 'ExprIndex':
+    case 'ExprIndex': {
+      const parent = await getTaggedNode(source, path);
+      if (!parent || typeof parent !== 'object') {
+        failures.push({
+          path: binaryPathToArray(path),
+          message: 'path is not an array or object',
+        });
+        break;
+      }
+      const expectedType = parent.type === 'array' ? 'number' : 'string';
       for (const expr of segment.query) {
-        let key: JsonScalar | T;
+        let key: JsonNode;
         try {
-          key = await evalJsonPathExpr(
-            json,
-            new PlusScalarAdapter(adapter),
-            expr
-          );
+          key = await evalJsonPathExpr(parent, source, expr);
         } catch (e) {
           failures.push({
-            path: [],
+            path: binaryPathToArray(path),
             message: `[JsonPath expression] ${e?.message || e}`,
           });
           break;
         }
-        switch (typeof key) {
-          case 'string':
-            pushOne(key, await adapter.getKey(json, key));
-            break;
-          case 'number':
-            pushOne(
-              key,
-              await adapter.getIndex(
-                json,
-                await adjustIndex(key, json, adapter)
-              )
-            );
-            break;
-          default:
-            failures.push({
-              path: [],
-              message: `[JsonPath expression] subscript: ${JSON.stringify(
-                key
-              )} is not a valid index or key`,
-            });
+        if (typeof key === expectedType) {
+          const subpath = binaryPathAppend(path, key as string | number);
+          if ((await source.getByPath(subpath)) === undefined) {
+            potential.push(subpath);
+          } else {
+            existing.push(subpath);
+          }
+          break;
+        } else {
+          failures.push({
+            path: binaryPathToArray(path),
+            message: `[JsonPath expression] subscript: expected ${expectedType}, got ${JSON.stringify(
+              key
+            )}`,
+          });
         }
       }
       break;
-    case 'Slice':
-      if (Array.isArray(json)) {
-        const { from = 0, to = json.length, step = 1 } = segment.query;
-        if (step === 0) {
-          failures.push({
-            path: [],
-            message: 'slice step cannot be 0',
-          });
-          break;
-        }
-        const start = await adjustIndex(step > 0 ? from : to, json, adapter);
-        const end = await adjustIndex(step > 0 ? to : from, json, adapter);
-        for (let i = start; i < end; i += step) {
-          if (i < json.length) {
-            existing.push([i]);
-          } else {
-            potential.push([i]);
-          }
-        }
-      } else {
+    }
+    case 'Slice': {
+      const node = await source.getByPath(path);
+      if (!isArray(node)) {
         failures.push({
-          path: [],
+          path: binaryPathToArray(path),
           message: 'slice on non-array',
         });
+        break;
+      }
+      const { from = 0, to = node.length, step = 1 } = segment.query;
+      if (step === 0) {
+        failures.push({
+          path: [],
+          message: 'slice step cannot be 0',
+        });
+        break;
+      }
+      const start = adjustIndex(step > 0 ? from : to, node);
+      const end = adjustIndex(step > 0 ? to : from, node);
+      for (let i = start; i < end; i += step) {
+        if (i < node.length) {
+          existing.push(binaryPathAppend(path, i));
+        } else {
+          potential.push(binaryPathAppend(path, i));
+        }
       }
       break;
+    }
     case 'ExprSlice': {
-      const length = await adapter.arrayLength(json);
-      if (length != null) {
-        let from: number, to: number, step: number;
-        try {
-          // eslint-disable-next-line no-inner-declarations
-          async function expectNumberExpr(expr) {
-            const plusAdapter = new PlusScalarAdapter(adapter);
-            const evald = await evalJsonPathExpr(json, plusAdapter, expr);
-            const n = plusAdapter.numberValue(evald);
-            if (n == null) {
-              throw new ExprError(
-                `slice: expected number, got ${JSON.stringify(
-                  await toJsonWithAdapter(evald, plusAdapter)
-                )}`
-              );
-            }
-            return n;
-          }
-          from = segment.query.from
-            ? await expectNumberExpr(segment.query.from)
-            : 0;
-          to = segment.query.to
-            ? await expectNumberExpr(segment.query.to)
-            : length;
-          step = segment.query.step
-            ? await expectNumberExpr(segment.query.step)
-            : 1;
-        } catch (e) {
-          failures.push({
-            path: [],
-            message: `[JsonPath expression] ${e?.message || e}`,
-          });
-          break;
-        }
-        if (step === 0) {
-          failures.push({
-            path: [],
-            message: 'slice step cannot be 0',
-          });
-          break;
-        }
-        const start = await adjustIndex(step > 0 ? from : to, json, adapter);
-        const end = await adjustIndex(step > 0 ? to : from, json, adapter);
-        for (let i = start; i < end; i += step) {
-          if (i < length) {
-            existing.push([i]);
-          } else {
-            potential.push([i]);
-          }
-        }
-      } else {
+      const node = await getTaggedNode(source, path);
+      if (!isArray(node)) {
         failures.push({
-          path: [],
+          path: binaryPathToArray(path),
           message: 'slice on non-array',
         });
+        break;
+      }
+      let from: number, to: number, step: number;
+      try {
+        const expectNumberExpr = async (expr) => {
+          const evald = await evalJsonPathExpr(node, source, expr);
+          if (typeof evald !== 'number') {
+            throw new ExprError(
+              `slice: expected number, got ${JSON.stringify(evald)}`
+            );
+          }
+          return evald;
+        };
+        from = segment.query.from
+          ? await expectNumberExpr(segment.query.from)
+          : 0;
+        to = segment.query.to
+          ? await expectNumberExpr(segment.query.to)
+          : node.length;
+        step = segment.query.step
+          ? await expectNumberExpr(segment.query.step)
+          : 1;
+      } catch (e) {
+        failures.push({
+          path: binaryPathToArray(path),
+          message: `[JsonPath expression] ${e?.message || e}`,
+        });
+        break;
+      }
+      if (step === 0) {
+        failures.push({
+          path: binaryPathToArray(path),
+          message: 'slice step cannot be 0',
+        });
+        break;
+      }
+      const start = await adjustIndex(step > 0 ? from : to, node);
+      const end = await adjustIndex(step > 0 ? to : from, node);
+      for (let i = start; i < end; i += step) {
+        if (i < node.length) {
+          existing.push(binaryPathAppend(path, i));
+        } else {
+          potential.push(binaryPathAppend(path, i));
+        }
       }
       break;
     }
     case 'Filter': {
-      const entries = await adapter.listEntries(json);
-      if (entries != null) {
-        const plusAdapter = new PlusScalarAdapter(adapter);
-        for (const [key, value] of entries) {
-          try {
-            if (
-              plusAdapter.booleanValue(
-                await evalJsonPathExpr(value, plusAdapter, segment.query)
-              )
-            ) {
-              existing.push([key]);
-            }
-          } catch (e) {
-            failures.push({
-              path: [key],
-              message: `[JsonPath expression] ${e?.message || e}`,
-            });
-          }
-        }
+      const node = await source.getByPath(path);
+      let entries: BinaryPath[];
+      if (isArray(node)) {
+        entries = [...new Array(node.length)].map((_, i) =>
+          binaryPathAppend(path, i)
+        );
+      } else if (isObject(node)) {
+        entries = node.keys.map((k) => binaryPathAppend(path, k));
       } else {
         failures.push({
-          path: [],
+          path: binaryPathToArray(path),
           message: 'filter on non-array, non-object',
         });
+        break;
+      }
+      for (const path of entries) {
+        try {
+          if (
+            await evalJsonPathExpr(
+              (await getTaggedNode(source, path)) as TaggedNode,
+              source,
+              segment.query
+            )
+          ) {
+            existing.push(path);
+          }
+        } catch (e) {
+          failures.push({
+            path: binaryPathToArray(path),
+            message: `[JsonPath expression] ${e?.message || e}`,
+          });
+        }
       }
       break;
     }
-    case 'Recursive':
+    case 'Recursive': {
+      const node = await source.getByPath(path);
+      let entries: BinaryPath[] = [];
+      if (isArray(node)) {
+        entries = [...new Array(node.length)].map((_, i) =>
+          binaryPathAppend(path, i)
+        );
+      } else if (isObject(node)) {
+        entries = node.keys.map((k) => binaryPathAppend(path, k));
+      }
       existing.push(
-        ...(await queryPaths(segment.query, json, adapter)).existing,
+        ...(await queryPaths(segment.query, source, path)).existing,
         ...(await flatMapAsync(
-          (await adapter.listEntries(json)) || [],
-          async ([key, value]) =>
-            (await queryPaths1(value, adapter, segment)).existing.map((p) => [
-              key,
-              ...p,
-            ])
+          entries,
+          async (path) => (await queryPaths1(source, segment, path)).existing
         ))
       );
+    }
   }
   return { existing, potential, failures };
 }
 
-async function queryValues1<T>(
-  segment: JsonPathSegment,
-  json: T,
-  adapter: JsonAdapter<T>
-): Promise<T[]> {
-  return (
-    await Promise.all(
-      (await queryPaths1(json, adapter, segment)).existing.map((p) =>
-        followPath(p, json, adapter)
-      )
-    )
-  )
-    .filter((r) => r.found)
-    .map((r) => r.value as T);
-}
-
-export function queryPaths<T>(
-  jsonPath: CompiledJsonPath,
-  json: T,
-  adapter: JsonAdapter<T>
-): Promise<{
-  existing: PathArray[];
-  potential: PathArray[];
-  failures: Failure[];
-}>;
-
-export function queryPaths<T>(
+export async function queryPaths(
   jsonPath: CompiledJsonPath | CompiledJsonIdPath,
-  json: T,
-  adapter: JsonAdapter<T>,
-  idToPath: (id: Id) => PathArray | undefined
+  source: JsonSource,
+  rootPath: BinaryPath = EMPTY_PATH
 ): Promise<{
-  existing: PathArray[];
-  potential: PathArray[];
-  failures: Failure[];
-}>;
-
-export async function queryPaths<T>(
-  jsonPath: CompiledJsonPath | CompiledJsonIdPath,
-  json: T,
-  adapter: JsonAdapter<T>,
-  idToPath: (id: Id) => PathArray | undefined = () => undefined
-): Promise<{
-  existing: PathArray[];
-  potential: PathArray[];
+  existing: BinaryPath[];
+  potential: BinaryPath[];
   failures: Failure[];
 }> {
   if (jsonPath.length && jsonPath[0].type === 'Id') {
-    const idPath = idToPath(jsonPath[0].query.id) || jsonPath[0].query.path;
-    const { found, value } = await followPath(idPath, json, adapter);
-    if (found) {
-      const { potential, failures, existing } = await queryPaths(
-        jsonPath.slice(1) as CompiledJsonPath,
-        value as T,
-        adapter
-      );
-      return {
-        existing: existing.map((p) => [...idPath, ...p]),
-        potential: potential.map((p) => [...idPath, ...p]),
-        failures: failures.map((f) => ({
-          ...f,
-          path: [...idPath, ...f.path],
-        })),
-      };
+    const idPath = Buffer.concat([
+      rootPath,
+      (await source.getPathById(jsonPath[0].query.id)) ||
+        pathArrayToBinary(jsonPath[0].query.path),
+    ]);
+    const node = await source.getByPath(idPath);
+    if (node !== undefined) {
+      return queryPaths(jsonPath.slice(1) as CompiledJsonPath, source, idPath);
     } else {
       return {
         existing: [],
         potential: [],
         failures: [
           {
-            path: idPath,
+            path: binaryPathToArray(idPath),
             message: 'path does not exist',
           },
         ],
       };
     }
   }
-  const potential: PathArray[] = [];
+  const potential: BinaryPath[] = [];
   const failures: Failure[] = [];
-  const existing = (
-    await reduceAsync<JsonPathSegment, { json: T; path: PathArray }[]>(
-      jsonPath as CompiledJsonPath,
-      [{ json, path: [] }],
-      async (paths, segment, i) =>
-        flatMapAsync(paths, async ({ json, path }) => {
-          const result = await queryPaths1(json, adapter, segment);
+  const existing = await reduceAsync<JsonPathSegment, BinaryPath[]>(
+    jsonPath as CompiledJsonPath,
+    [rootPath],
+    async (paths, segment, i) =>
+      flatMapAsync(paths, async (path) => {
+        const result = await queryPaths1(source, segment, path);
+        failures.push(...result.failures);
+        if (i === jsonPath.length - 1) {
+          potential.push(...result.potential);
+        } else {
           failures.push(
-            ...result.failures.map((f) => ({
-              ...f,
-              path: [...path, ...f.path],
+            ...result.potential.map((p) => ({
+              path: binaryPathToArray(p),
+              message: 'path does not exist',
             }))
           );
-          if (i === jsonPath.length - 1) {
-            potential.push(...result.potential.map((p) => [...path, ...p]));
-          } else {
-            failures.push(
-              ...result.potential.map((p) => ({
-                path: [...path, ...p],
-                message: 'path does not exist',
-              }))
-            );
-          }
-          return result.existing.map((p) => ({
-            json: p.reduce((j, i) => j?.[i], json),
-            path: [...path, ...p],
-          }));
-        })
-    )
-  ).map((x) => x.path);
+        }
+        return result.existing;
+      })
+  );
   return { existing, potential, failures };
 }
 
-export async function queryValues<T>(
-  path: CompiledJsonPath,
-  json: T,
-  adapter: JsonAdapter<T>
-): Promise<T[]> {
-  return reduceAsync(path, [json], (jsons, segment) =>
-    flatMapAsync(jsons, (json) => queryValues1(segment, json, adapter))
-  );
+export async function queryValues(
+  jsonPath: CompiledJsonPath,
+  source: JsonSource,
+  rootPath: BinaryPath = EMPTY_PATH
+): Promise<Json[]> {
+  const { existing } = await queryPaths(jsonPath, source, rootPath);
+  return Promise.all(existing.map((p) => sourceToJson(source, p)));
 }
 
 export function canMatchAbsolutePath(
@@ -1016,4 +1001,35 @@ export function jsonPathToString(
     }
   }
   return str;
+}
+
+export async function anchorPathToId(
+  source: JsonSource,
+  path: CompiledJsonPath
+): Promise<CompiledJsonPath | CompiledJsonIdPath> {
+  let lastId: Id | null = null;
+  let lastIdIndex = 0;
+  let queryPath: PathArray = [];
+  const queryPathAccum: (string | number)[] = [];
+  for (let i = 0; i < path.length; i++) {
+    const segment = path[i];
+    if (segment.type === 'Index' || segment.type === 'Key') {
+      queryPathAccum.push(segment.query);
+      const ids = await source.getIdsByPath(pathArrayToBinary(queryPathAccum));
+      if (ids.length) {
+        lastId = ids[0];
+        lastIdIndex = i;
+        queryPath = [...queryPathAccum];
+      }
+    } else {
+      break;
+    }
+  }
+  if (!lastId) {
+    return path;
+  }
+  return [
+    { type: 'Id', query: { id: lastId, path: queryPath } },
+    ...path.slice(lastIdIndex + 1),
+  ];
 }

@@ -1,14 +1,16 @@
 import { Change, mapActionToList } from './actions';
+import { binaryPathToArray } from './binary-path';
 import { Id, Uuid } from './id';
-import { toJsonWithAdapter } from './json-adapter';
-import { JsonCache, JsonCacheAdapter } from './json-cache';
+import JsonCache from './json-cache';
 import {
+  anchorPathToId,
   canMatchAbsolutePath,
   CompiledJsonPath,
   compileJsonPath,
   compileJsonPathAction,
   JsonPath,
   JsonPathAction,
+  queryValues,
   splitIntoSingularPaths,
   Vars,
 } from './jsonpath';
@@ -25,7 +27,7 @@ interface QueryListener {
 export default class Store implements Queryable {
   private readonly cache: JsonCache;
   private readonly uuid: Promise<Uuid>;
-  private nextIndex;
+  private nextIndex: number;
   private queryListeners: QueryListener[] = [];
 
   constructor(public readonly saveState: SaveState<{ readonly peerId: Uuid }>) {
@@ -49,7 +51,7 @@ export default class Store implements Queryable {
       (path) =>
         Promise.all(
           splitIntoSingularPaths(path).map((path) =>
-            this.cache.anchorPathToId(path)
+            anchorPathToId(this.cache, path)
           )
         )
     );
@@ -67,6 +69,9 @@ export default class Store implements Queryable {
   async mergeOps(
     ops: readonly Op[]
   ): Promise<{ changes: readonly Change[]; failures: readonly Failure[] }> {
+    if (!ops.length) {
+      return { changes: [], failures: [] };
+    }
     const { changes, failures } = await this.saveState.insert(ops);
     const changedPaths = flatMap(changes, (change) => {
       switch (change.type) {
@@ -81,14 +86,12 @@ export default class Store implements Queryable {
     });
     changedPaths.forEach((path) => this.cache.expirePath(path));
     for (const listener of this.queryListeners) {
-      if (changedPaths.some((p) => canMatchAbsolutePath(listener.path, p))) {
-        listener.callback(
-          await Promise.all(
-            (await this.cache.queryValues(listener.path)).map((j) =>
-              toJsonWithAdapter(j, JsonCacheAdapter)
-            )
-          )
-        );
+      if (
+        changedPaths.some((p) =>
+          canMatchAbsolutePath(listener.path, binaryPathToArray(p))
+        )
+      ) {
+        listener.callback(await queryValues(listener.path, this.cache));
       }
     }
     return { changes, failures };
@@ -112,28 +115,16 @@ export default class Store implements Queryable {
       typeof arg1 === 'function' ? arg1 : (arg2 as (json: Json) => void);
     const entry = { path, callback };
     this.queryListeners.push(entry);
-    setImmediate(async () =>
-      callback(
-        await Promise.all(
-          (await this.cache.queryValues(path)).map((j) =>
-            toJsonWithAdapter(j, JsonCacheAdapter)
-          )
-        )
-      )
-    );
+    setImmediate(async () => callback(await queryValues(path, this.cache)));
     return {
-      cancel() {
+      cancel: () => {
         this.queryListeners = this.queryListeners.filter((x) => x !== entry);
       },
     };
   }
 
-  async queryOnce(query: JsonPath, vars: Vars = {}): Promise<Json[]> {
-    return Promise.all(
-      (await this.cache.queryValues(compileJsonPath(query, vars))).map((j) =>
-        toJsonWithAdapter(j, JsonCacheAdapter)
-      )
-    );
+  queryOnce(query: JsonPath, vars: Vars = {}): Promise<Json[]> {
+    return queryValues(compileJsonPath(query, vars), this.cache);
   }
 
   opsRange(earliestId: Id | null, latestId: Id | null): Promise<readonly Op[]> {

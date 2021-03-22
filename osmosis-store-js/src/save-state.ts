@@ -1,12 +1,9 @@
 import { Action, Change } from './actions';
+import { BinaryPath } from './binary-path';
 import { CausalTree, Id } from './id';
-import {
-  CacheSource,
-  JsonCacheDatum,
-  NonEmptyJsonCacheDatum,
-} from './json-cache';
+import { JsonNode, JsonSource } from './json-source';
 import { CompiledJsonIdPath, CompiledJsonPath } from './jsonpath';
-import { AbsolutePathArray, Failure, PathArray } from './types';
+import { Failure } from './types';
 
 export type Op = CausalTree & Action<CompiledJsonPath | CompiledJsonIdPath>;
 
@@ -20,7 +17,7 @@ export interface SavePoint extends StateSummary {
   readonly width: number;
 }
 
-export abstract class SaveState<Metadata> implements CacheSource {
+export abstract class SaveState<Metadata> implements JsonSource {
   abstract insert(
     ops: readonly Op[]
   ): Promise<{
@@ -30,7 +27,7 @@ export abstract class SaveState<Metadata> implements CacheSource {
   get ops(): Promise<readonly Op[]> {
     return this.opsRange(null, null);
   }
-  get failures(): Promise<readonly Failure[]> {
+  get failures(): Promise<readonly (Failure & CausalTree)[]> {
     return this.failuresRange(null, null);
   }
   abstract opsRange(
@@ -40,21 +37,19 @@ export abstract class SaveState<Metadata> implements CacheSource {
   abstract failuresRange(
     earliestId: Id | null,
     latestId: Id | null
-  ): Promise<readonly Failure[]>;
+  ): Promise<readonly (Failure & CausalTree)[]>;
+  abstract garbageCollect(earliestId: Id): Promise<void>;
   abstract rewind(latestId: Id): Promise<readonly Op[]>;
   abstract savePoints: Promise<readonly SavePoint[]>;
   abstract metadata: Promise<Metadata>;
   abstract setMetadata(metadata: Metadata): Promise<void>;
   abstract initMetadata(initializer: () => Promise<Metadata>): Promise<void>;
   abstract stateSummary: Promise<StateSummary>;
-  abstract lookupByPath(path: PathArray): Promise<JsonCacheDatum>;
-  abstract lookupById(
+  abstract getByPath(path: BinaryPath): Promise<JsonNode | undefined>;
+  abstract getById(id: Id): Promise<JsonNode | undefined>;
+  abstract getPathById(id: Id): Promise<BinaryPath | undefined>;
+  abstract getIdsByPath(path: BinaryPath): Promise<Id[]>;
+  abstract getIdsAfter(
     id: Id
-  ): Promise<(JsonCacheDatum & { readonly path: AbsolutePathArray }) | null>;
-  abstract listObject(
-    path: PathArray
-  ): Promise<readonly (NonEmptyJsonCacheDatum & { key: string })[]>;
-  abstract listArray(
-    path: PathArray
-  ): Promise<readonly NonEmptyJsonCacheDatum[]>;
+  ): Promise<Iterable<{ readonly id: Id; readonly path: BinaryPath }>>;
 }

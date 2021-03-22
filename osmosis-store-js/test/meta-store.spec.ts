@@ -1,24 +1,34 @@
 import { expect } from 'chai';
 import { EventEmitter } from 'events';
 import { describe, it } from 'mocha';
+import { BinaryPath } from '../src/binary-path';
+import { AnonymousJsonSource, ConstantJsonSource } from '../src/json-source';
 import { MetadataSource, MetaStore } from '../src/meta-store';
 import { Json } from '../src/types';
 
-class MockMetadataSource implements MetadataSource {
+class MockMetadataSource extends AnonymousJsonSource implements MetadataSource {
   private readonly events = new EventEmitter();
+  private source: ConstantJsonSource;
 
-  constructor(public readonly initialState: Json) {}
+  constructor(initialState: Json) {
+    super();
+    this.source = new ConstantJsonSource(initialState);
+  }
 
   setState(newState: Json) {
-    this.events.emit('update', newState);
+    this.source = new ConstantJsonSource(newState);
+    this.events.emit('update');
   }
 
-  subscribe(listener: (json: Json) => void) {
+  getByPath(path: BinaryPath) {
+    return this.source.getByPath(path);
+  }
+
+  subscribe(listener: () => void) {
     this.events.on('update', listener);
-  }
-
-  unsubscribe(listener: (json: Json) => void) {
-    this.events.off('update', listener);
+    return {
+      cancel: () => this.events.off('update', listener),
+    };
   }
 }
 
